@@ -4,7 +4,6 @@ project (ACMH_Kompute)
 # find_package(OpenCV REQUIRED )
 
 # include_directories(${OpenCV_INCLUDE_DIRS})
-# include_directories(.)
 
 set(-O3 --use_fast_math --maxrregcount=128 --ptxas-options=-v -std=c++11 --compiler-options -Wall -gencode arch=compute_52,code=sm_52)
 
@@ -28,9 +27,9 @@ endif()
 # For compilation ...
 # Specify target & source files to compile it from
 add_executable(
-    ACMH_Kompute
-    main.h
-    main.cpp
+    main
+    src/main.h
+    src/main.cpp
     )
 
 # For linking ...
