@@ -1,3 +1,6 @@
 [submodule "ACMH"]
 	path = ACMH
 	url = git@github.com:GhiXu/ACMH.git
+[submodule "kompute"]
+	path = kompute
+	url = git@github.com:KomputeProject/kompute.git
