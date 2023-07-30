@@ -2,5 +2,11 @@
 	path = ACMH
 	url = git@github.com:GhiXu/ACMH.git
 [submodule "kompute"]
-	path = kompute
+	path = extern/kompute
 	url = git@github.com:KomputeProject/kompute.git
+[submodule "extern/libjpeg-turbo"]
+	path = extern/libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
+[submodule "extern/sail"]
+	path = extern/sail
+	url = https://github.com/HappySeaFox/sail.git
