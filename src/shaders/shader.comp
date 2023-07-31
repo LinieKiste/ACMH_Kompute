@@ -1,9 +1,8 @@
 #version 450
 
 layout (local_size_x = 1) in;
-// [y][x][group] (vec4: channels)
+
 layout (set = 0, binding = 0) buffer buf_in_image { readonly restrict vec4 in_image[]; };
-// [y][x][group] (vec4: channels)
 layout (set = 0, binding = 1) buffer buf_out_image { writeonly restrict vec4 out_image[]; };
 
 layout (constant_id = 0) const float width = 0;
@@ -14,10 +13,30 @@ uint index(uvec2 pos) {
     return (pos.x + (pos.y * uint(width)));
 }
 
+vec4 getPixel(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+        return vec4(0.0); // Border pixels are treated as black
+    } else {
+        return in_image[index(uvec2(x, y))];
+    }
+}
+
 void main()
 {	
-    uint in_ptr = index(gl_GlobalInvocationID.xy);
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
 
-    vec4 value = in_image[in_ptr];
-    out_image[in_ptr] = vec4(value.x, 0, 0, 0);
+    // Sobel operator
+    vec4 gx = -getPixel(x - 1, y - 1) + getPixel(x + 1, y - 1)
+               -2.0 * getPixel(x - 1, y) + 2.0 * getPixel(x + 1, y)
+               -getPixel(x - 1, y + 1) + getPixel(x + 1, y + 1);
+
+    vec4 gy = -getPixel(x - 1, y - 1) - 2.0 * getPixel(x, y - 1) - getPixel(x + 1, y - 1)
+               +getPixel(x - 1, y + 1) + 2.0 * getPixel(x, y + 1) + getPixel(x + 1, y + 1);
+
+    // Combine the two gradients
+    vec4 color = sqrt(gx * gx + gy * gy);
+
+    // Write the output pixel
+    out_image[index(uvec2(x, y))] = color;
 }

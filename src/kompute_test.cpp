@@ -79,13 +79,8 @@ int kompute(sail::image &image, const std::string& shader) {
     std::vector<std::shared_ptr<kp::Tensor>> params = {tensorIn, tensorOut};
 
     // 3. Create algorithm based on shader (supports buffers & push/spec constants)
-    // kp::Workgroup workgroup({1, 1, 3});
-    // std::vector<float> specConsts({ 2 });
-    // std::vector<float> pushConstsA({ 2.0 });
-    // std::vector<float> pushConstsB({ 3.0 });
-
     auto algorithm = mgr.algorithm(
-        params, compileSource(shader), kp::Workgroup({width, height, 3}),
+        params, compileSource(shader), kp::Workgroup({width, height, 1}),
         {static_cast<float>(image.width()), static_cast<float>(image.height()),
          static_cast<float>(image.palette().color_count())},
         std::vector<float>({}));
