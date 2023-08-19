@@ -14,13 +14,18 @@ if(false AND CMAKE_COMPILER_IS_GNUCXX)
 endif()
 
 find_package(SailC++ REQUIRED)
+find_package(glm REQUIRED)
+find_package(OpenCV REQUIRED )
 add_subdirectory(extern/kompute)
+set(CMAKE_CXX_STANDARD 17)
 
 # For compilation ...
 # Specify target & source files to compile it from
 add_executable(main
-    src/main.h
     src/main.cpp
+    src/ACMH.cpp
+    src/helpers.cpp
+    src/sfm.cpp
     )
 
 # For linking ...
@@ -28,4 +33,6 @@ add_executable(main
 target_link_libraries(main PRIVATE
     kompute
     SAIL::sail-c++
+    glm
+    ${OpenCV_LIBS}
     )

@@ -1,5 +1,6 @@
 #include "kompute/Core.hpp"
 #include "kompute/Kompute.hpp"
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -27,8 +28,7 @@ compileSource(
 
 std::vector<float> BPP24_RGB_to_float_rgb(sail::image input) {
     std::vector<float> result;
-    result.reserve(input.pixels_size() * (4/3));
-    std::cout << input.pixels_size() << std::endl;
+    result.reserve(input.pixels_size());
 
     uint8_t* input_pixels = (uint8_t*)input.pixels();
     for(int i = 0; i < input.pixels_size(); i++) {
@@ -39,16 +39,13 @@ std::vector<float> BPP24_RGB_to_float_rgb(sail::image input) {
         }
     }
 
-    std::cout << result.size() << std::endl;
     return result;
 }
 
 std::vector<uint8_t> float_rgb_to_BPP24_RGB(void* data, size_t size) {
     std::vector<uint8_t> result;
-    result.reserve(size);
+    result.reserve(size * (3/4));
 
-    std::cout << result.size() << std::endl;
-    std::cout << size << std::endl;
     float* float_data = (float*)data;
     for(int i=0; i<size; i++) {
         if(i%4 == 3) continue; // skip last pixel
@@ -56,7 +53,6 @@ std::vector<uint8_t> float_rgb_to_BPP24_RGB(void* data, size_t size) {
         auto new_pixel = static_cast<uint8_t>(float_data[i]*255);
         result.emplace_back(new_pixel);
     }
-    std::cout << result.size() << std::endl;
     return result;
 }
 
@@ -70,6 +66,7 @@ int kompute(sail::image &image, const std::string& shader) {
     // 2. Create and initialise Kompute Tensors through manager
 
     // Input tensor
+    assert(image.pixel_format() == SAIL_PIXEL_FORMAT_BPP24_RGB);
     auto float_vec = BPP24_RGB_to_float_rgb(image);
     std::shared_ptr<kp::TensorT<float>> tensorIn = mgr.tensorT(float_vec);
 
@@ -92,13 +89,8 @@ int kompute(sail::image &image, const std::string& shader) {
         ->record<kp::OpTensorSyncLocal>(params)
         ->eval();
 
-    std::cout << "------------------------------" << std::endl;
     auto out_pixels = float_rgb_to_BPP24_RGB(tensorOut->data(), tensorOut->size());
     sail::image imageOut = sail::image(out_pixels.data(), image.pixel_format(), width, height);
-
-    sail::image_output image_output("./first.png");
-    image_output.next_frame(imageOut);
-    image_output.finish();
 
     image = imageOut;
     return 0;

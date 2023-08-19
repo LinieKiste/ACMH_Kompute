@@ -1,3 +1,4 @@
+#include "ACMH.hpp"
 #include "kompute_test.cpp"
 #include <cstdlib>
 #include <fstream>
@@ -5,6 +6,11 @@
 #include <string>
 
 int main() {
+  auto acmh = ACMH( "../../Bilder");
+  acmh.RunPatchMatch();
+}
+
+int old_main() {
   // load image
   sail::image image = sail::image("../../Bilder/IMG_6723.png");
 

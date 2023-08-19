@@ -1,0 +1,52 @@
+#version 450
+
+layout (local_size_x = 1) in;
+
+layout (set = 0, binding = 0) buffer buf_in_image { readonly restrict vec4 in_image[]; };
+layout (set = 0, binding = 1) buffer buf_out_image { writeonly restrict vec4 out_image[]; };
+
+layout (constant_id = 0) const float width = 0;
+layout (constant_id = 1) const float height = 0;
+layout (constant_id = 2) const float channels = 0;
+
+void RandomInitialization(cudaTextureObjects *texture_objects, Camera *cameras, float4 *plane_hypotheses, float *costs, curandState *rand_states, unsigned int *selected_views, const PatchMatchParams params)
+{
+    const int2 p = make_int2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
+    int width = cameras[0].width;
+    int height = cameras[0].height;
+
+    if (p.x >= width || p.y >= height) {
+        return;
+    }
+
+    const int center = p.y * width + p.x;
+    curand_init(clock64(), p.y, p.x, &rand_states[center]);
+
+    if (!params.geom_consistency) {
+        plane_hypotheses[center] = GenerateRandomPlaneHypothesis(cameras[0], p, &rand_states[center], params.depth_min, params.depth_max);
+        costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
+    }
+    else {
+        float4 plane_hypothesis = plane_hypotheses[center];
+        plane_hypothesis = TransformNormal2RefCam(cameras[0], plane_hypothesis);
+        float depth = plane_hypothesis.w;
+        plane_hypothesis.w = GetDistance2Origin(cameras[0], p, depth, plane_hypothesis);
+        plane_hypotheses[center] = plane_hypothesis;
+        costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
+    }
+}
+
+uint index(uvec2 pos) {
+    return (pos.x + (pos.y * uint(width)));
+}
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+
+    color = in_image[index(uvec2(x,y))];
+
+    // Write the output pixel
+    out_image[index(uvec2(x, y))] = color;
+
+}
