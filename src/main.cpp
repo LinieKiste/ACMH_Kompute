@@ -1,27 +1,31 @@
-#include "ACMH.hpp"
-#include "kompute_test.cpp"
-#include <cstdlib>
-#include <fstream>
-#include <sail-c++/sail-c++.h>
-#include <string>
+#include "main.hpp"
 
-int main() {
-  auto acmh = ACMH( "../../Bilder");
-  acmh.RunPatchMatch();
-}
+int main(int argc, char** argv) {
+  if (argc < 2){
+        std::cout << "USAGE: ACMH dense_folder" << std::endl;
+        return -1;
+  }
 
-int old_main() {
-  // load image
-  sail::image image = sail::image("../../Bilder/IMG_6723.png");
+    std::string dense_folder = argv[1];
+    std::vector<Problem> problems;
+    helpers::GenerateSampleList(dense_folder, problems);
 
-  // load shader
-  std::ifstream shaderfile("../src/shaders/shader.comp");
-  std::stringstream shader;
-  shader << shaderfile.rdbuf();
+    std::string output_folder = dense_folder + std::string("/ACMH");
+    mkdir(output_folder.c_str(), 0777);
 
-  kompute(image, shader.str());
+    size_t num_images = problems.size();
+    std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
 
-  sail::image_output image_output("./out.png");
-  image_output.next_frame(image);
-  image_output.finish();
+    bool geom_consistency = false;
+    for (size_t i = 0; i < num_images; ++i) {
+        helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
+    }
+    geom_consistency = true;
+    for (size_t i = 0; i < num_images; ++i) {
+        helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
+    }
+
+    // RunFusion(dense_folder, problems, geom_consistency);
+
+    return 0;
 }

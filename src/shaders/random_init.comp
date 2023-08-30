@@ -2,38 +2,176 @@
 
 layout (local_size_x = 1) in;
 
-layout (set = 0, binding = 0) buffer buf_in_image { readonly restrict vec4 in_image[]; };
-layout (set = 0, binding = 1) buffer buf_out_image { writeonly restrict vec4 out_image[]; };
+layout (set = 0, binding = 0) buffer images_buf { readonly restrict vec4 images[]; };
+layout (set = 0, binding = 1) buffer plane_buf { vec4 plane_hypotheses[]; };
+layout (set = 0, binding = 2) buffer costs_buf { float costs[]; };
+
+struct Camera {
+  float K[9];
+  float R[9];
+  float t[3];
+  int height;
+  int width;
+  float depth_min;
+  float depth_max;
+};
+
+layout(push_constant) uniform PushConstants {
+    Camera camera;
+    bool geom_consistency;
+    } pcs;
 
 layout (constant_id = 0) const float width = 0;
 layout (constant_id = 1) const float height = 0;
 layout (constant_id = 2) const float channels = 0;
 
-void RandomInitialization(cudaTextureObjects *texture_objects, Camera *cameras, float4 *plane_hypotheses, float *costs, curandState *rand_states, unsigned int *selected_views, const PatchMatchParams params)
+// alternative: http://lukas-polok.cz/tutorial_sphere.htm
+float rand(vec2 range){
+    float range_abs = abs(range.x - range.y);
+    vec2 co = gl_GlobalInvocationID.xy;
+    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453) * range_abs;
+}
+// between 0 and 1
+float rand(){
+    vec2 co = gl_GlobalInvocationID.xy;
+    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+}
+
+vec3 Get3DPoint(vec2 p, float depth)
 {
-    const int2 p = make_int2(blockIdx.x * blockDim.x + threadIdx.x, blockIdx.y * blockDim.y + threadIdx.y);
-    int width = cameras[0].width;
-    int height = cameras[0].height;
+    vec3 result;
+    result.x = depth * (p.x - pcs.camera.K[2]) / pcs.camera.K[0];
+    result.y = depth * (p.y - pcs.camera.K[5]) / pcs.camera.K[4];
+    result.z = depth;
+    return result;
+}
+
+float GetDistance2Origin(vec2 p, float depth, vec4 normal)
+{
+    vec3 X = Get3DPoint(p, depth);
+    return -(dot(normal.xyz, X));
+}
+
+vec4 GetViewDirection(vec2 p, float depth)
+{
+    vec3 X = Get3DPoint(p, depth);
+    // TODO: IS THIS REALLY NECESSARY???
+    // float norm = sqrt(X[0] * X[0] + X[1] * X[1] + X[2] * X[2]);
+
+    // vec4 view_direction;
+    // view_direction.x = X[0] / norm;
+    // view_direction.y = X[1] / norm;
+    // view_direction.z =  X[2] / norm;
+    // view_direction.w = 0;
+    return vec4(normalize(X), 0);
+}
+
+/*
+float ComputeMultiViewInitialCostandSelectedViews(vec2 p, vec4 plane_hypothesis, uint *selected_views, const PatchMatchParams params)
+{
+    float cost_max = 2.0f;
+    float cost_vector[32] = {2.0f};
+    float cost_vector_copy[32] = {2.0f};
+    int cost_count = 0;
+    int num_valid_views = 0;
+
+    for (int i = 1; i < params.num_images; ++i) {
+        float c = ComputeBilateralNCC(images[0], cameras[0], images[i], cameras[i], p, plane_hypothesis, params);
+        cost_vector[i - 1] = c;
+        cost_vector_copy[i - 1] = c;
+        cost_count++;
+        if (c < cost_max) {
+            num_valid_views++;
+        }
+    }
+
+    sort_small(cost_vector, cost_count);
+    *selected_views = 0;
+
+    int top_k = min(num_valid_views, params.top_k);
+    if (top_k > 0) {
+        float cost = 0.0f;
+        for (int i = 0; i < top_k; ++i) {
+            cost += cost_vector[i];
+        }
+        float cost_threshold = cost_vector[top_k - 1];
+        for (int i = 0; i < params.num_images - 1; ++i) {
+            if (cost_vector_copy[i] <= cost_threshold) {
+                setBit(*selected_views, i);
+            }
+        }
+        return cost / top_k;
+    } else {
+        return cost_max;
+    }
+}
+*/
+
+vec4 GenerateRandomNormal(vec2 p, float depth)
+{
+    vec4 normal;
+    float q1 = 1.0f;
+    float q2 = 1.0f;
+    float s = 2.0f;
+    while (s >= 1.0f) {
+        q1 = 2.0f * rand() -1.0f;
+        q2 = 2.0f * rand() - 1.0f;
+        s = q1 * q1 + q2 * q2;
+    }
+    const float sq = sqrt(1.0f - s);
+    normal.x = 2.0f * q1 * sq;
+    normal.y = 2.0f * q2 * sq;
+    normal.z = 1.0f - 2.0f * s;
+    normal.w = 0;
+
+    vec4 view_direction = GetViewDirection(p, depth);
+    float dot_product = dot(normal.xyz, view_direction.xyz);
+    if (dot_product > 0.0f) {
+        normal.x = -normal.x;
+        normal.y = -normal.y;
+        normal.z = - normal.z;
+    }
+
+    return normalize(normal);
+}
+
+
+vec4 GenerateRandomPlaneHypothesis(vec2 p, float depth_min, float depth_max)
+{
+    float depth = rand() * (depth_max - depth_min) + depth_min;
+    vec4 plane_hypothesis = GenerateRandomNormal(p,depth);
+    plane_hypothesis.w = GetDistance2Origin(p, depth, plane_hypothesis);
+    return plane_hypothesis;
+}
+
+
+void RandomInitialization() {
+    vec2 p = vec2(float(gl_WorkGroupID.x), float(gl_WorkGroupID.y));
+    int width = pcs.camera.width;
+    int height = pcs.camera.height;
 
     if (p.x >= width || p.y >= height) {
         return;
     }
 
-    const int center = p.y * width + p.x;
-    curand_init(clock64(), p.y, p.x, &rand_states[center]);
+    int center = int(p.y * width + p.x);
+    // curand_init(clock64(), p.y, p.x, &rand_states[center]);
 
-    if (!params.geom_consistency) {
-        plane_hypotheses[center] = GenerateRandomPlaneHypothesis(cameras[0], p, &rand_states[center], params.depth_min, params.depth_max);
-        costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
+    if (!pcs.geom_consistency) {
+        plane_hypotheses[center] = GenerateRandomPlaneHypothesis(p, pcs.camera.depth_min, pcs.camera.depth_max);
+        // TODO:
+        // costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
     }
+    /*
     else {
-        float4 plane_hypothesis = plane_hypotheses[center];
+        vec4 plane_hypothesis = plane_hypotheses[center];
         plane_hypothesis = TransformNormal2RefCam(cameras[0], plane_hypothesis);
         float depth = plane_hypothesis.w;
         plane_hypothesis.w = GetDistance2Origin(cameras[0], p, depth, plane_hypothesis);
         plane_hypotheses[center] = plane_hypothesis;
         costs[center] = ComputeMultiViewInitialCostandSelectedViews(texture_objects[0].images, cameras, p, plane_hypotheses[center], &selected_views[center], params);
     }
+    */
 }
 
 uint index(uvec2 pos) {
@@ -44,9 +182,9 @@ void main() {
     int x = int(gl_GlobalInvocationID.x);
     int y = int(gl_GlobalInvocationID.y);
 
-    color = in_image[index(uvec2(x,y))];
+    vec4 color = images[index(uvec2(x,y))];
 
     // Write the output pixel
-    out_image[index(uvec2(x, y))] = color;
+    plane_hypotheses[index(uvec2(x, y))] = color;
 
 }

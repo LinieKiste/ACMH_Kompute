@@ -1,112 +1,262 @@
 #include "ACMH.hpp"
 #include "helpers.hpp"
 
-#include <glm/vec3.hpp>
 #include <filesystem>
-#include <sail-common/common.h>
-#include <string>
+#include <glm/vec3.hpp>
 #include <iostream>
+#include <string>
 namespace fs = std::filesystem;
 
-ACMH::ACMH(std::string img_folder) {
-  std::vector<sail::image> images;
-  size_t totalSize = 0;
-  std::vector<float> combinedBuffer;
+ACMH::ACMH(std::string dense_folder, int ref_image_id,
+           std::vector<int> src_image_ids)
+    : sfm(dense_folder, ref_image_id, src_image_ids) {}
 
-  // go through all images
-  for (auto path : fs::directory_iterator(img_folder)) {
-    sail::image image = sail::image(path.path());
-    nr_images++;
+void ACMH::init_depths(std::string dense_folder, int ref_image_id,
+                 std::vector<int> src_image_ids) {
+  depths.clear();
 
-    std::vector<float> float_img = helpers::BPP24_RGB_to_float_rgb(image);
-    combinedBuffer.insert(combinedBuffer.end(), float_img.begin(), float_img.end());
-    break; // TODO: remove
+  std::stringstream result_path;
+  result_path << dense_folder << "/ACMH"
+              << "/2333_" << std::setw(8) << std::setfill('0')
+              << ref_image_id;
+  std::string result_folder = result_path.str();
+  std::string depth_path = result_folder + "/depths.dmb";
+  cv::Mat_<float> ref_depth;
+  helpers::readDepthDmb(depth_path, ref_depth);
+  depths.push_back(ref_depth);
+
+  size_t num_src_images = src_image_ids.size();
+  for (size_t i = 0; i < num_src_images; ++i) {
+    std::stringstream result_path;
+    result_path << dense_folder << "/ACMH"
+                << "/2333_" << std::setw(8) << std::setfill('0')
+                << src_image_ids[i];
+    std::string result_folder = result_path.str();
+    std::string depth_path = result_folder + "/depths.dmb";
+    cv::Mat_<float> depth;
+    helpers::readDepthDmb(depth_path, depth);
+    depths.push_back(depth);
   }
+}
 
-  this->pixels = combinedBuffer;
+std::vector<float> mat_to_vec(cv::Mat &image) {
+    return image.reshape(1, image.total()*image.channels());
+}
+
+// not sure about alignment, might be possible with single copy
+/*
+std::vector<float> cam_to_vec(Camera camera) {
+  std::vector<float> vec;
+  vec.insert(vec.end(), camera.K.cbegin(), camera.K.cend());
+  vec.insert(vec.end(), camera.R.cbegin(), camera.R.cend());
+  vec.insert(vec.end(), camera.t.cbegin(), camera.t.cend());
+  vec.push_back(static_cast<float>(camera.height));
+  vec.push_back(static_cast<float>(camera.width));
+  vec.push_back(camera.depth_min);
+  vec.push_back(camera.depth_max);
+  return vec;
+}
+*/
+
+void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
+                                     int ref_image_id,
+                                     std::vector<int> src_image_ids) {
+  int num_images = (int)sfm.images.size();
+
+  std::vector<float> img_tensor_data;
+  for (int i = 0; i < num_images; ++i) {
+    auto image_vec = mat_to_vec(sfm.images[i]);
+    img_tensor_data.insert(img_tensor_data.end(), image_vec.begin(),
+                           image_vec.end());
+    }
+    std::shared_ptr<kp::TensorT<float>> image_tensor =
+        mgr.tensor(img_tensor_data);
+
+    // TODO: USE PUSH CONSTANTS FOR CAMERAS
+    // std::shared_ptr<kp::TensorT<float>> camera_tensor =
+    //     mgr.tensor(cam_to_vec(sfm.cameras[0]));
+
+    auto no_pixels = sfm.cameras[0].height * sfm.cameras[0].width;
+    plane_hypotheses_host = new glm::vec4[no_pixels];
+    auto plane_hypotheses_tensor =
+        mgr.tensor((void *)plane_hypotheses_host, no_pixels, sizeof(glm::vec4),
+                   kp::Tensor::TensorDataTypes::eFloat);
+    // cudaMalloc((void**)&plane_hypotheses_cuda, sizeof(float4) * (cameras[0].height * cameras[0].width));
+
+    costs_host = std::vector<float>(no_pixels);
+    auto costs_tensor = mgr.tensor(costs_host);
+    // cudaMalloc((void**)&costs_cuda, sizeof(float) * (cameras[0].height * cameras[0].width));
+
+    // TODO: WHAT IS THIS??
+    // cudaMalloc((void**)&rand_states_cuda, sizeof(curandState) * (cameras[0].height * cameras[0].width));
+    // cudaMalloc((void**)&selected_views_cuda, sizeof(unsigned int) * (cameras[0].height * cameras[0].width));
+
+    // cudaMalloc((void**)&depths_cuda, sizeof(float) * (cameras[0].height * cameras[0].width));
+
+/*
+    if (params.geom_consistency) {
+        for (int i = 0; i < num_images; ++i) {
+            int rows = depths[i].rows;
+            int cols = depths[i].cols;
+
+            // cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+            cudaMallocArray(&cuDepthArray[i], &channelDesc, cols, rows);
+            cudaMemcpy2DToArray (cuDepthArray[i], 0, 0, depths[i].ptr<float>(), depths[i].step[0], cols*sizeof(float), rows, cudaMemcpyHostToDevice);
+
+            struct cudaResourceDesc resDesc;
+            memset(&resDesc, 0, sizeof(cudaResourceDesc));
+            resDesc.resType = cudaResourceTypeArray;
+            resDesc.res.array.array = cuDepthArray[i];
+
+            struct cudaTextureDesc texDesc;
+            memset(&texDesc, 0, sizeof(cudaTextureDesc));
+            texDesc.addressMode[0] = cudaAddressModeWrap;
+            texDesc.addressMode[1] = cudaAddressModeWrap;
+            texDesc.filterMode = cudaFilterModeLinear;
+            texDesc.readMode  = cudaReadModeElementType;
+            texDesc.normalizedCoords = 0;
+
+            cudaCreateTextureObject(&(texture_depths_host.images[i]), &resDesc, &texDesc, NULL);
+        }
+        cudaMalloc((void**)&texture_depths_cuda, sizeof(cudaTextureObjects));
+        cudaMemcpy(texture_depths_cuda, &texture_depths_host, sizeof(cudaTextureObjects), cudaMemcpyHostToDevice);
+
+        std::stringstream result_path;
+        result_path << dense_folder << "/ACMH" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
+        std::string result_folder = result_path.str();
+        std::string depth_path = result_folder + "/depths.dmb";
+        std::string normal_path = result_folder + "/normals.dmb";
+        std::string cost_path = result_folder + "/costs.dmb";
+        cv::Mat_<float> ref_depth;
+        cv::Mat_<cv::Vec3f> ref_normal;
+        cv::Mat_<float> ref_cost;
+        readDepthDmb(depth_path, ref_depth);
+        depths.push_back(ref_depth);
+        readNormalDmb(normal_path, ref_normal);
+        readDepthDmb(cost_path, ref_cost);
+        int width = ref_depth.cols;
+        int height = ref_depth.rows;
+        for (int col = 0; col < width; ++col) {
+            for (int row = 0; row < height; ++row) {
+                int center = row * width + col;
+                float4 plane_hypothesis;
+                plane_hypothesis.x = ref_normal(row, col)[0];
+                plane_hypothesis.y = ref_normal(row, col)[1];
+                plane_hypothesis.z = ref_normal(row, col)[2];
+                plane_hypothesis.w = ref_depth(row, col);
+                plane_hypotheses_host[center] = plane_hypothesis;
+                costs_host[center] = ref_cost(row, col);
+            }
+        }
+
+        cudaMemcpy(plane_hypotheses_cuda, plane_hypotheses_host, sizeof(float4) * width * height, cudaMemcpyHostToDevice);
+        cudaMemcpy(costs_cuda, costs_host, sizeof(float) * width * height, cudaMemcpyHostToDevice);
+    }
+    */
+    kp_params = {image_tensor, plane_hypotheses_tensor, costs_tensor};
 }
 
 void ACMH::RunPatchMatch() {
-    const int width = sfm.cameras[0].width;
-    const int height = sfm.cameras[0].height;
+  const int width = sfm.cameras[0].width;
+  const int height = sfm.cameras[0].height;
 
-    int BLOCK_W = 32;
-    int BLOCK_H = (BLOCK_W / 2);
+  int BLOCK_W = 32;
+  int BLOCK_H = (BLOCK_W / 2);
 
-    glm::uvec3 grid_size_randinit;
-    grid_size_randinit.x = (width + 16 - 1) / 16;
-    grid_size_randinit.y=(height + 16 - 1) / 16;
-    grid_size_randinit.z = 1;
-    glm::uvec3 block_size_randinit;
-    block_size_randinit.x = 16;
-    block_size_randinit.y = 16;
-    block_size_randinit.z = 1;
-/*
-    glm::vec3 grid_size_checkerboard;
-    grid_size_checkerboard.x = (width + BLOCK_W - 1) / BLOCK_W;
-    grid_size_checkerboard.y= ( (height / 2) + BLOCK_H - 1) / BLOCK_H;
-    grid_size_checkerboard.z = 1;
-    glm::uvec3 block_size_checkerboard;
-    block_size_checkerboard.x = BLOCK_W;
-    block_size_checkerboard.y = BLOCK_H;
-    block_size_checkerboard.z = 1;
-*/
-    int max_iterations = 3;
+  glm::uvec3 grid_size_randinit;
+  grid_size_randinit.x = width;
+  grid_size_randinit.y = height;
+  grid_size_randinit.z = 1;
+  // grid_size_randinit.x = (width + 16 - 1) / 16;
+  // grid_size_randinit.y = (height + 16 - 1) / 16;
+  // grid_size_randinit.z = 1;
+  // glm::uvec3 block_size_randinit;
+  // block_size_randinit.x = 16;
+  // block_size_randinit.y = 16;
+  // block_size_randinit.z = 1;
+  /*
+      glm::vec3 grid_size_checkerboard;
+      grid_size_checkerboard.x = (width + BLOCK_W - 1) / BLOCK_W;
+      grid_size_checkerboard.y= ( (height / 2) + BLOCK_H - 1) / BLOCK_H;
+      grid_size_checkerboard.z = 1;
+      glm::uvec3 block_size_checkerboard;
+      block_size_checkerboard.x = BLOCK_W;
+      block_size_checkerboard.y = BLOCK_H;
+      block_size_checkerboard.z = 1;
+  */
+  int max_iterations = 3;
 
-    kp::Manager mgr;
+  // load shader
+  std::ifstream shaderfile("./src/shaders/random_init.comp");
+  if (shaderfile.fail())
+    throw std::runtime_error("wrong path for shaderfile provided!");
+  std::stringstream shader;
+  shader << shaderfile.rdbuf();
 
-    // Input tensor
-    std::shared_ptr<kp::TensorT<float>> tensorIn = mgr.tensorT(this->pixels);
-    auto tensorOut = mgr.tensorT<float>(std::vector<float>(tensorIn->size(), 0x0000FF00));
+  auto algorithm =
+      mgr.algorithm(kp_params, helpers::compileSource(shader.str()),
+                    kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y,
+                                   grid_size_randinit.z}),
+                    {}, std::vector<PushConstants>{{sfm.cameras[0], params.geom_consistency}});
 
-    std::vector<std::shared_ptr<kp::Tensor>> params = {tensorIn, tensorOut};
+  // 4. Run operation synchronously using sequence
+  mgr.sequence()
+      ->record<kp::OpTensorSyncDevice>(kp_params)
+      ->record<kp::OpAlgoDispatch>(
+          algorithm,
+          std::vector<PushConstants>{{sfm.cameras[0], params.geom_consistency}}) // Binds push consts
+      ->record<kp::OpTensorSyncLocal>(kp_params)
+      ->eval();
 
-    // load shader
-    std::ifstream shaderfile("../src/shaders/shader.comp");
-    std::stringstream shader;
-    shader << shaderfile.rdbuf();
+  // RandomInitialization<<<grid_size_randinit,
+  // block_size_randinit>>>(texture_objects_cuda, cameras_cuda,
+  // plane_hypotheses_cuda, costs_cuda, rand_states_cuda, selected_views_cuda,
+  // params); CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
-    auto algorithm = mgr.algorithm(
-        params, helpers::compileSource(shader.str()), kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y, grid_size_randinit.z}),
-        {3024., 4032., 3.},
-        std::vector<float>({}));
+  /*
+  for (int i = 0; i < max_iterations; ++i) {
+      BlackPixelUpdate<<<grid_size_checkerboard,
+  block_size_checkerboard>>>(texture_objects_cuda, texture_depths_cuda,
+  cameras_cuda, plane_hypotheses_cuda, costs_cuda, rand_states_cuda,
+  selected_views_cuda, params, i); CUDA_SAFE_CALL(cudaDeviceSynchronize());
+      RedPixelUpdate<<<grid_size_checkerboard,
+  block_size_checkerboard>>>(texture_objects_cuda, texture_depths_cuda,
+  cameras_cuda, plane_hypotheses_cuda, costs_cuda, rand_states_cuda,
+  selected_views_cuda, params, i); CUDA_SAFE_CALL(cudaDeviceSynchronize());
+      printf("iteration: %d\n", i);
+  }
 
-    // 4. Run operation synchronously using sequence
-    mgr.sequence()
-        ->record<kp::OpTensorSyncDevice>(params)
-        ->record<kp::OpAlgoDispatch>(algorithm) // Binds default push consts
-        ->record<kp::OpTensorSyncLocal>(params)
-        ->eval();
+  GetDepthandNormal<<<grid_size_randinit, block_size_randinit>>>(cameras_cuda,
+  plane_hypotheses_cuda, params); CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
-    // RandomInitialization<<<grid_size_randinit, block_size_randinit>>>(texture_objects_cuda, cameras_cuda, plane_hypotheses_cuda, costs_cuda, rand_states_cuda, selected_views_cuda, params);
-    // CUDA_SAFE_CALL(cudaDeviceSynchronize());
+  BlackPixelFilter<<<grid_size_checkerboard,
+  block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
+  CUDA_SAFE_CALL(cudaDeviceSynchronize());
+  RedPixelFilter<<<grid_size_checkerboard,
+  block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
+  CUDA_SAFE_CALL(cudaDeviceSynchronize());
+  */
 
-    /*
-    for (int i = 0; i < max_iterations; ++i) {
-        BlackPixelUpdate<<<grid_size_checkerboard, block_size_checkerboard>>>(texture_objects_cuda, texture_depths_cuda, cameras_cuda, plane_hypotheses_cuda, costs_cuda, rand_states_cuda, selected_views_cuda, params, i);
-        CUDA_SAFE_CALL(cudaDeviceSynchronize());
-        RedPixelUpdate<<<grid_size_checkerboard, block_size_checkerboard>>>(texture_objects_cuda, texture_depths_cuda, cameras_cuda, plane_hypotheses_cuda, costs_cuda, rand_states_cuda, selected_views_cuda, params, i);
-        CUDA_SAFE_CALL(cudaDeviceSynchronize());
-        printf("iteration: %d\n", i);
-    }
+  // cudaMemcpy(plane_hypotheses_host, plane_hypotheses_cuda, sizeof(float4) *
+  // width * height, cudaMemcpyDeviceToHost); cudaMemcpy(costs_host,
+  // costs_cuda, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
+  // CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
-    GetDepthandNormal<<<grid_size_randinit, block_size_randinit>>>(cameras_cuda, plane_hypotheses_cuda, params);
-    CUDA_SAFE_CALL(cudaDeviceSynchronize());
-
-    BlackPixelFilter<<<grid_size_checkerboard, block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
-    CUDA_SAFE_CALL(cudaDeviceSynchronize());
-    RedPixelFilter<<<grid_size_checkerboard, block_size_checkerboard>>>(cameras_cuda, plane_hypotheses_cuda, costs_cuda);
-    CUDA_SAFE_CALL(cudaDeviceSynchronize());
-    */
-
-    // cudaMemcpy(plane_hypotheses_host, plane_hypotheses_cuda, sizeof(float4) *
-    // width * height, cudaMemcpyDeviceToHost); cudaMemcpy(costs_host,
-    // costs_cuda, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
-    // CUDA_SAFE_CALL(cudaDeviceSynchronize());
-    auto out_pixels = helpers::float_rgb_to_BPP24_RGB(tensorOut->data(), 3024*4032*3);
-    sail::image imageOut = sail::image(out_pixels.data(), SAIL_PIXEL_FORMAT_BPP24_RGB, width, height);
-
-    sail::image_output image_output("./out.png");
-    image_output.next_frame(imageOut);
-    image_output.finish();
+  // TODO: OUTPUT IMAGE
 }
+
+// helpers
+void ACMH::SetGeomConsistencyParams() {
+  params.geom_consistency = true;
+  params.max_iterations = 2;
+}
+
+int ACMH::GetReferenceImageWidth() { return sfm.cameras[0].width; }
+
+int ACMH::GetReferenceImageHeight() { return sfm.cameras[0].height; }
+
+glm::vec4 ACMH::GetPlaneHypothesis(const int index) {
+  return plane_hypotheses_host[index];
+}
+
+float ACMH::GetCost(const int index) { return costs_host[index]; }

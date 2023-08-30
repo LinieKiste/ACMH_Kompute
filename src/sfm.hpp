@@ -1,16 +1,15 @@
 #pragma once
 
-#include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include <opencv2/imgcodecs.hpp>
 
 // std
+#include <iostream>
+#include <fstream>
+#include <iomanip>
 #include <string>
 #include <vector>
-
-struct Problem {
-    int ref_image_id;
-    std::vector<int> src_image_ids;
-};
 
 struct Camera {
   float K[9];
@@ -24,10 +23,20 @@ struct Camera {
 
 class SfM {
 public:
+  SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src_image_ids);
+  struct
+  {
+    int num_images = 5;
+    int max_image_size = 3200;
+    float depth_min = 0.0f;
+    float depth_max = 1.0f;
+    float baseline = 0.54f;
+    float disparity_min = 0.0f;
+    float disparity_max = 1.0f;
+  } params;
   std::vector<cv::Mat> images;
   std::vector<Camera> cameras;
-  void InputInitialization(const std::string &dense_folder,
-                           const Problem &problem);
 
 private:
+void get_image_and_camera(int image_id, std::string image_folder, std::string cam_folder);
 };
