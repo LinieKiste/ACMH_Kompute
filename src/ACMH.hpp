@@ -6,13 +6,28 @@
 #include <glm/glm.hpp>
 
 // std
+#include <filesystem>
+#include <iostream>
+#include <string>
 #include <memory>
 #include <cstdint>
 #include <cstring>
 
+struct Parameters {
+  int max_iterations = 3;
+  int patch_size = 11;
+  int num_images = 5;
+  int radius_increment = 2;
+  float sigma_spatial = 5.0f;
+  float sigma_color = 3.0f;
+  int top_k = 4;
+  float depth_min = 0.0f;
+  float depth_max = 1.0f;
+  uint geom_consistency = false; // uint does not work because of padding
+};
+
 struct PushConstants {
-  Camera camera;
-  bool geom_consistency;
+  Parameters params;
 };
 
 class ACMH {
@@ -32,7 +47,7 @@ public:
   float GetCost(const int index);
 
   kp::Manager mgr;
-  glm::vec4 *plane_hypotheses_host;
+  std::vector<float> plane_hypotheses_host; // vector of glm::vec4
   std::vector<float> costs_host;
 
 private:
@@ -41,16 +56,13 @@ private:
   std::vector<cv::Mat> depths;
 
   std::vector<std::shared_ptr<kp::Tensor>> kp_params;
+  struct {
+    std::shared_ptr<kp::TensorT<float>> image_tensor;
+    std::shared_ptr<kp::TensorT<float>> plane_hypotheses_tensor;
+    std::shared_ptr<kp::TensorT<float>> costs_tensor;
+    std::shared_ptr<kp::TensorT<float>> camera_tensor;
+    std::shared_ptr<kp::TensorT<uint>> selected_views_tensor;
+  } tensors;
 
-  struct
-  {
-    int max_iterations = 3;
-    int patch_size = 11;
-    int num_images = 5;
-    int radius_increment = 2;
-    float sigma_spatial = 5.0f;
-    float sigma_color = 3.0f;
-    int top_k = 4;
-    bool geom_consistency = false;
-  } params;
+  Parameters params;
 };

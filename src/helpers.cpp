@@ -5,7 +5,7 @@ std::vector<uint32_t> compileSource(const std::string &source) {
   std::ofstream fileOut("tmp_kp_shader.comp");
   fileOut << source;
   fileOut.close();
-  if (system(std::string("glslangValidator -V tmp_kp_shader.comp -o "
+  if (system(std::string("glslangValidator -V -gVS tmp_kp_shader.comp -o "
                          "tmp_kp_shader.comp.spv")
                  .c_str()))
     throw std::runtime_error("Error running glslangValidator command");

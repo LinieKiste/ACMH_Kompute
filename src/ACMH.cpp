@@ -1,15 +1,16 @@
 #include "ACMH.hpp"
 #include "helpers.hpp"
 
-#include <filesystem>
-#include <glm/vec3.hpp>
-#include <iostream>
-#include <string>
+#include "renderdoc_app.h"
+
 namespace fs = std::filesystem;
 
 ACMH::ACMH(std::string dense_folder, int ref_image_id,
            std::vector<int> src_image_ids)
-    : sfm(dense_folder, ref_image_id, src_image_ids) {}
+    : sfm(dense_folder, ref_image_id, src_image_ids) {
+  params.depth_min = sfm.params.depth_min;
+  params.depth_max = sfm.params.depth_max;
+}
 
 void ACMH::init_depths(std::string dense_folder, int ref_image_id,
                  std::vector<int> src_image_ids) {
@@ -44,47 +45,41 @@ std::vector<float> mat_to_vec(cv::Mat &image) {
 }
 
 // not sure about alignment, might be possible with single copy
-/*
-std::vector<float> cam_to_vec(Camera camera) {
+std::vector<float> cams_to_vec(std::vector<Camera> cameras) {
   std::vector<float> vec;
-  vec.insert(vec.end(), camera.K.cbegin(), camera.K.cend());
-  vec.insert(vec.end(), camera.R.cbegin(), camera.R.cend());
-  vec.insert(vec.end(), camera.t.cbegin(), camera.t.cend());
-  vec.push_back(static_cast<float>(camera.height));
-  vec.push_back(static_cast<float>(camera.width));
-  vec.push_back(camera.depth_min);
-  vec.push_back(camera.depth_max);
+  for (auto camera : cameras) {
+    vec.insert(vec.end(), camera.K.cbegin(), camera.K.cend());
+    vec.insert(vec.end(), camera.R.cbegin(), camera.R.cend());
+    vec.insert(vec.end(), camera.t.cbegin(), camera.t.cend());
+    vec.push_back(static_cast<float>(camera.height));
+    vec.push_back(static_cast<float>(camera.width));
+    vec.push_back(camera.depth_min);
+    vec.push_back(camera.depth_max);
+  }
   return vec;
 }
-*/
 
 void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
                                      int ref_image_id,
                                      std::vector<int> src_image_ids) {
   int num_images = (int)sfm.images.size();
 
+  // image tensor
   std::vector<float> img_tensor_data;
+  int total_no_pixels = 0;
   for (int i = 0; i < num_images; ++i) {
     auto image_vec = mat_to_vec(sfm.images[i]);
     img_tensor_data.insert(img_tensor_data.end(), image_vec.begin(),
                            image_vec.end());
-    }
-    std::shared_ptr<kp::TensorT<float>> image_tensor =
-        mgr.tensor(img_tensor_data);
 
-    // TODO: USE PUSH CONSTANTS FOR CAMERAS
-    // std::shared_ptr<kp::TensorT<float>> camera_tensor =
-    //     mgr.tensor(cam_to_vec(sfm.cameras[0]));
+    total_no_pixels += sfm.cameras[i].height * sfm.cameras[i].width;
+  }
 
-    auto no_pixels = sfm.cameras[0].height * sfm.cameras[0].width;
-    plane_hypotheses_host = new glm::vec4[no_pixels];
-    auto plane_hypotheses_tensor =
-        mgr.tensor((void *)plane_hypotheses_host, no_pixels, sizeof(glm::vec4),
-                   kp::Tensor::TensorDataTypes::eFloat);
-    // cudaMalloc((void**)&plane_hypotheses_cuda, sizeof(float4) * (cameras[0].height * cameras[0].width));
+    // auto no_pixels = sfm.cameras[0].height * sfm.cameras[0].width;
+    // plane_hypotheses_host = std::vector<float>(no_pixels * sizeof(glm::vec4));
 
-    costs_host = std::vector<float>(no_pixels);
-    auto costs_tensor = mgr.tensor(costs_host);
+    // costs_host = std::vector<float>(no_pixels);
+    // auto costs_tensor = mgr.tensor(costs_host);
     // cudaMalloc((void**)&costs_cuda, sizeof(float) * (cameras[0].height * cameras[0].width));
 
     // TODO: WHAT IS THIS??
@@ -153,7 +148,31 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
         cudaMemcpy(costs_cuda, costs_host, sizeof(float) * width * height, cudaMemcpyHostToDevice);
     }
     */
-    kp_params = {image_tensor, plane_hypotheses_tensor, costs_tensor};
+    // image tensor
+    tensors.image_tensor =
+        mgr.tensor(img_tensor_data);
+
+    // plane hypotheses tensor
+    plane_hypotheses_host = std::vector<float>(4 * total_no_pixels); // glm::vec4 per pixel
+    tensors.plane_hypotheses_tensor =
+        mgr.tensor(plane_hypotheses_host);
+
+    // costs tensor
+    costs_host = std::vector<float>(total_no_pixels);
+    tensors.costs_tensor = mgr.tensor(costs_host);
+
+    // camera tensor
+    tensors.camera_tensor =
+        mgr.tensor(cams_to_vec(sfm.cameras));
+
+    // selected views tensor
+    auto selected_views_host = std::vector<uint32_t>(total_no_pixels);
+    tensors.selected_views_tensor =
+        mgr.tensorT(selected_views_host);
+
+    kp_params = {tensors.image_tensor, tensors.plane_hypotheses_tensor,
+                 tensors.costs_tensor, tensors.camera_tensor,
+                 tensors.selected_views_tensor};
 }
 
 void ACMH::RunPatchMatch() {
@@ -189,7 +208,7 @@ void ACMH::RunPatchMatch() {
   // load shader
   std::ifstream shaderfile("./src/shaders/random_init.comp");
   if (shaderfile.fail())
-    throw std::runtime_error("wrong path for shaderfile provided!");
+    throw std::runtime_error("invalid shader path");
   std::stringstream shader;
   shader << shaderfile.rdbuf();
 
@@ -197,16 +216,31 @@ void ACMH::RunPatchMatch() {
       mgr.algorithm(kp_params, helpers::compileSource(shader.str()),
                     kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y,
                                    grid_size_randinit.z}),
-                    {}, std::vector<PushConstants>{{sfm.cameras[0], params.geom_consistency}});
+                    {}, std::vector<PushConstants>{{params}});
+
+  // INIT RENDERDOC
+  RENDERDOC_API_1_1_2 *rdoc_api = NULL;
+  if (void *mod = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD)) {
+    pRENDERDOC_GetAPI RENDERDOC_GetAPI =
+        (pRENDERDOC_GetAPI)dlsym(mod, "RENDERDOC_GetAPI");
+    int ret =
+        RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_1_2, (void **)&rdoc_api);
+    assert(ret == 1);
+  }
+  if (rdoc_api)
+    rdoc_api->StartFrameCapture(NULL, NULL);
 
   // 4. Run operation synchronously using sequence
   mgr.sequence()
       ->record<kp::OpTensorSyncDevice>(kp_params)
       ->record<kp::OpAlgoDispatch>(
           algorithm,
-          std::vector<PushConstants>{{sfm.cameras[0], params.geom_consistency}}) // Binds push consts
+          std::vector<PushConstants>{{params}}) // Binds push consts
       ->record<kp::OpTensorSyncLocal>(kp_params)
       ->eval();
+
+  if (rdoc_api)
+    rdoc_api->EndFrameCapture(NULL, NULL);
 
   // RandomInitialization<<<grid_size_randinit,
   // block_size_randinit>>>(texture_objects_cuda, cameras_cuda,
@@ -241,6 +275,8 @@ void ACMH::RunPatchMatch() {
   // width * height, cudaMemcpyDeviceToHost); cudaMemcpy(costs_host,
   // costs_cuda, sizeof(float) * width * height, cudaMemcpyDeviceToHost);
   // CUDA_SAFE_CALL(cudaDeviceSynchronize());
+  this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
+  this->costs_host = tensors.costs_tensor->vector();
 
   // TODO: OUTPUT IMAGE
 }
@@ -255,8 +291,9 @@ int ACMH::GetReferenceImageWidth() { return sfm.cameras[0].width; }
 
 int ACMH::GetReferenceImageHeight() { return sfm.cameras[0].height; }
 
+// TODO: 90% chance this is wrong
 glm::vec4 ACMH::GetPlaneHypothesis(const int index) {
-  return plane_hypotheses_host[index];
+  return *reinterpret_cast<glm::vec4 *>(plane_hypotheses_host.data() + (index * sizeof(glm::vec4)));
 }
 
 float ACMH::GetCost(const int index) { return costs_host[index]; }
