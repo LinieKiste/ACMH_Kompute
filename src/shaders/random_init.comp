@@ -7,7 +7,8 @@ layout (set = 0, binding = 0) buffer images_buf { readonly restrict float images
 layout (set = 0, binding = 1) buffer plane_buf { vec4 plane_hypotheses[]; };
 layout (set = 0, binding = 2) buffer costs_buf { float costs[]; };
 layout (set = 0, binding = 3) buffer camera_buf { readonly restrict float cameras[]; };
-layout (set = 0, binding = 4) buffer selected_views_buf {uint selected_views[]; };
+layout (set = 0, binding = 4) buffer random_states_buf {float random_states[]; };
+layout (set = 0, binding = 5) buffer selected_views_buf {uint selected_views[]; };
 
 struct Camera {
   float K[9];
@@ -58,6 +59,7 @@ Camera get_camera(int index) {
 
 // alternative: http://lukas-polok.cz/tutorial_sphere.htm
 float rand(){
+    return 0.5;
     vec2 co = gl_GlobalInvocationID.xy;
     return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
 }
@@ -76,8 +78,14 @@ int image_offset(int image_idx){
 float get_pixel_from_image(int image_idx, ivec2 p){
     Camera camera = get_camera(image_idx);
     int offset = image_offset(image_idx);
-    offset += p.x * int(camera.width) + p.y;
+    p = max(ivec2(0, 0), p);
+    p = min(ivec2(camera.width, camera.height), p);
+    offset += p.y * int(camera.width) + p.x;
     return images[offset];
+}
+
+float get_pixel_from_image(int image_idx, vec2 p){
+    return get_pixel_from_image(image_idx, ivec2(p.x+0.5, p.y+0.5));
 }
 
 // these can probably both be simplified using library functions
@@ -235,7 +243,7 @@ float ComputeBilateralWeight(const float x_dist, const float y_dist, const float
     return exp(-spatial_dist / (2.0f * sigma_spatial* sigma_spatial) - color_dist / (2.0f * sigma_color * sigma_color));
 }
 
-float ComputeBilateralNCC(const int src_idx, const int ref_idx, const ivec2 p, const vec4 plane_hypothesis)
+float ComputeBilateralNCC(const int ref_idx, const int src_idx, const ivec2 p, const vec4 plane_hypothesis)
 {
     Camera src_camera = get_camera(src_idx);
     Camera ref_camera = get_camera(ref_idx);
@@ -272,7 +280,7 @@ float ComputeBilateralNCC(const int src_idx, const int ref_idx, const ivec2 p, c
                 const ivec2 ref_pt = ivec2(p.x + i, p.y + j);
                 const float ref_pix = get_pixel_from_image(ref_idx, ref_pt);
                 vec2 src_pt = ComputeCorrespondingPoint(H, ref_pt);
-                const float src_pix = get_pixel_from_image(src_idx, ref_pt);
+                const float src_pix = get_pixel_from_image(src_idx, src_pt);
 
                 float weight = ComputeBilateralWeight(i, j, ref_pix, ref_center_pix, pcs.params.sigma_spatial, pcs.params.sigma_color);
 
@@ -314,8 +322,9 @@ float ComputeBilateralNCC(const int src_idx, const int ref_idx, const ivec2 p, c
 
 float[32] init_array(float value) {
     float arr[32];
-    for (int i = 0; i < 32; ++i) {
-        arr[i] = value;
+    arr[0] = value;
+    for (int i = 1; i < 32; ++i) {
+        arr[i] = 0.0;
     }
     return arr;
 }

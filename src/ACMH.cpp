@@ -8,6 +8,7 @@ namespace fs = std::filesystem;
 ACMH::ACMH(std::string dense_folder, int ref_image_id,
            std::vector<int> src_image_ids)
     : sfm(dense_folder, ref_image_id, src_image_ids) {
+  params.num_images = sfm.params.num_images;
   params.depth_min = sfm.params.depth_min;
   params.depth_max = sfm.params.depth_max;
 }
@@ -162,8 +163,14 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
     tensors.costs_tensor = mgr.tensor(costs_host);
 
     // camera tensor
+    std::vector<float> camera_data_host = cams_to_vec(sfm.cameras);
     tensors.camera_tensor =
-        mgr.tensor(cams_to_vec(sfm.cameras));
+        mgr.tensor(camera_data_host);
+
+    // selected views tensor
+    auto random_states_host = std::vector<float>(total_no_pixels);
+    tensors.random_states_tensor =
+        mgr.tensorT(random_states_host);
 
     // selected views tensor
     auto selected_views_host = std::vector<uint32_t>(total_no_pixels);
@@ -171,7 +178,7 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
         mgr.tensorT(selected_views_host);
 
     kp_params = {tensors.image_tensor, tensors.plane_hypotheses_tensor,
-                 tensors.costs_tensor, tensors.camera_tensor,
+                 tensors.costs_tensor, tensors.camera_tensor, tensors.random_states_tensor,
                  tensors.selected_views_tensor};
 }
 
@@ -291,9 +298,9 @@ int ACMH::GetReferenceImageWidth() { return sfm.cameras[0].width; }
 
 int ACMH::GetReferenceImageHeight() { return sfm.cameras[0].height; }
 
-// TODO: 90% chance this is wrong
+// TODO: 80% chance this is wrong
 glm::vec4 ACMH::GetPlaneHypothesis(const int index) {
-  return *reinterpret_cast<glm::vec4 *>(plane_hypotheses_host.data() + (index * sizeof(glm::vec4)));
+  return *reinterpret_cast<glm::vec4 *>(plane_hypotheses_host.data() + (index * 4));
 }
 
 float ACMH::GetCost(const int index) { return costs_host[index]; }

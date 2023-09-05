@@ -1,8 +1,10 @@
 cmake_minimum_required (VERSION 3.7)
 project (ACMH_Kompute LANGUAGES CXX)
 
+add_definitions(-g)
 if(false AND CMAKE_COMPILER_IS_GNUCXX)
     add_definitions(-std=c++17)
+    add_definitions(-g)
     add_definitions(-pthread)
     add_definitions(-Wall)
     add_definitions(-Wextra)

@@ -61,6 +61,7 @@ private:
     std::shared_ptr<kp::TensorT<float>> plane_hypotheses_tensor;
     std::shared_ptr<kp::TensorT<float>> costs_tensor;
     std::shared_ptr<kp::TensorT<float>> camera_tensor;
+    std::shared_ptr<kp::TensorT<float>> random_states_tensor;
     std::shared_ptr<kp::TensorT<uint>> selected_views_tensor;
   } tensors;
 
