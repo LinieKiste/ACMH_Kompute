@@ -7,6 +7,3 @@
 [submodule "extern/libjpeg-turbo"]
 	path = extern/libjpeg-turbo
 	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git
-[submodule "extern/sail"]
-	path = extern/sail
-	url = https://github.com/HappySeaFox/sail.git

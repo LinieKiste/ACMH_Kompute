@@ -1,0 +1,20 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+#include "propagation.comp"
+layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
+
+void RedPixelUpdate(const int iter)
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
+    if (gl_WorkGroupID.x % 2 == 0) {
+        p.y = p.y * 2 + 1;
+    } else {
+        p.y = p.y * 2;
+    }
+
+    CheckerboardPropagation(p, iter);
+}
+
+void main(){
+    RedPixelUpdate(pcs.iter);
+}

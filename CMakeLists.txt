@@ -1,7 +1,6 @@
 cmake_minimum_required (VERSION 3.7)
 project (ACMH_Kompute LANGUAGES CXX)
 
-add_definitions(-g)
 if(false AND CMAKE_COMPILER_IS_GNUCXX)
     add_definitions(-std=c++17)
     add_definitions(-g)
@@ -18,6 +17,11 @@ endif()
 find_package(glm REQUIRED)
 find_package(OpenCV REQUIRED )
 add_subdirectory(extern/kompute)
+
+# add_definitions(-g)
+add_definitions(-O3)
+add_definitions(-ffast-math)
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math -march=native") # extend release-profile with fast-math
 set(CMAKE_CXX_STANDARD 17)
 
 # For compilation ...

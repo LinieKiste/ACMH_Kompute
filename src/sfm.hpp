@@ -24,6 +24,8 @@ struct Camera {
 class SfM {
 public:
   SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src_image_ids);
+  static Camera ReadCamera(const std::string &cam_path);
+
   struct
   {
     int num_images = 5;
@@ -38,5 +40,6 @@ public:
   std::vector<Camera> cameras;
 
 private:
-void get_image_and_camera(int image_id, std::string image_folder, std::string cam_folder);
+  void get_image_and_camera(int image_id, std::string image_folder,
+                            std::string cam_folder);
 };

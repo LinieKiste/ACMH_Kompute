@@ -58,7 +58,7 @@ SfM::SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src
   params.disparity_max = cameras[0].K[0] * params.baseline / params.depth_min;
 }
 
-Camera ReadCamera(const std::string &cam_path)
+Camera SfM::ReadCamera(const std::string &cam_path)
 {
     Camera camera;
     std::ifstream file(cam_path);

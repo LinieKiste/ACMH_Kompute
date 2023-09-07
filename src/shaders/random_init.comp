@@ -1,92 +1,7 @@
 #version 450
-
-// TODO: USE SPEC CONSTANTS TO DYNAMICALLY SET BLOCK SIZE
-layout (local_size_x = 1) in;
-
-layout (set = 0, binding = 0) buffer images_buf { readonly restrict float images[]; };
-layout (set = 0, binding = 1) buffer plane_buf { vec4 plane_hypotheses[]; };
-layout (set = 0, binding = 2) buffer costs_buf { float costs[]; };
-layout (set = 0, binding = 3) buffer camera_buf { readonly restrict float cameras[]; };
-layout (set = 0, binding = 4) buffer random_states_buf {float random_states[]; };
-layout (set = 0, binding = 5) buffer selected_views_buf {uint selected_views[]; };
-
-struct Camera {
-  float K[9];
-  float R[9];
-  float t[3];
-  float height;
-  float width;
-  float depth_min;
-  float depth_max;
-};
-
-struct Parameters {
-  int max_iterations;
-  int patch_size;
-  int num_images;
-  int radius_increment;
-  float sigma_spatial;
-  float sigma_color;
-  int top_k;
-  float depth_min;
-  float depth_max;
-  bool geom_consistency;
-};
-
-layout(push_constant) uniform PushConstants {
-    Parameters params;
-    } pcs;
-
-layout (constant_id = 0) const float width = 0;
-layout (constant_id = 1) const float height = 0;
-layout (constant_id = 2) const float channels = 0;
-
-Camera get_camera(int index) {
-    // size of camera is 9+9+3+1+1+1+1 = 25
-    int cam_size = 9+9+3+(4*1); // arrays + 4 scalars
-    int i = index * cam_size;
-    Camera result = Camera(
-       float[9](cameras[i], cameras[i+1], cameras[i+2], cameras[i+3], cameras[i+4], cameras[i+5], cameras[i+6], cameras[i+7], cameras[i+8]),
-       float[9](cameras[i+9], cameras[i+10], cameras[i+11], cameras[i+12], cameras[i+13], cameras[i+14], cameras[i+15], cameras[i+16], cameras[i+17]),
-       float[3](cameras[i+18], cameras[i+19], cameras[i+20]),
-       cameras[i+21],
-       cameras[i+22],
-       cameras[i+23],
-       cameras[i+24]
-    );
-    return result;
-}
-
-// alternative: http://lukas-polok.cz/tutorial_sphere.htm
-float rand(){
-    return 0.5;
-    vec2 co = gl_GlobalInvocationID.xy;
-    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
-}
-
-int image_offset(int image_idx){
-    int offset = 0;
-    for(int i = 0; i < image_idx; i++){
-        Camera camera = get_camera(i);
-        int width = int(camera.width);
-        int height = int(camera.height);
-        offset += width*height;
-    }
-    return offset;
-}
-
-float get_pixel_from_image(int image_idx, ivec2 p){
-    Camera camera = get_camera(image_idx);
-    int offset = image_offset(image_idx);
-    p = max(ivec2(0, 0), p);
-    p = min(ivec2(camera.width, camera.height), p);
-    offset += p.y * int(camera.width) + p.x;
-    return images[offset];
-}
-
-float get_pixel_from_image(int image_idx, vec2 p){
-    return get_pixel_from_image(image_idx, ivec2(p.x+0.5, p.y+0.5));
-}
+#extension GL_GOOGLE_include_directive : enable
+#include "common.comp"
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // these can probably both be simplified using library functions
 float[32] sort_small(float[32] d, const int n)
@@ -117,115 +32,6 @@ float[32] sort_small_weighted(float[32] d, inout float[32] w, int n)
     return d;
 }
 
-uint setBit(uint x, const uint n)
-{
-    return x |= uint(1 << n);
-}
-
-vec3 Get3DPoint(const Camera camera, vec2 p, float depth)
-{
-    vec3 result;
-    result.x = depth * (p.x - camera.K[2]) / camera.K[0];
-    result.y = depth * (p.y - camera.K[5]) / camera.K[4];
-    result.z = depth;
-    return result;
-}
-
-float GetDistance2Origin(const Camera camera, vec2 p, float depth, vec4 normal)
-{
-    vec3 X = Get3DPoint(camera, p, depth);
-    return -(dot(normal.xyz, X));
-}
-
-vec4 GetViewDirection(const Camera camera, vec2 p, float depth)
-{
-    vec3 X = Get3DPoint(camera, p, depth);
-    // TODO: IS THIS REALLY NECESSARY???
-    // float norm = sqrt(X[0] * X[0] + X[1] * X[1] + X[2] * X[2]);
-
-    // vec4 view_direction;
-    // view_direction.x = X[0] / norm;
-    // view_direction.y = X[1] / norm;
-    // view_direction.z =  X[2] / norm;
-    // view_direction.w = 0;
-    return vec4(normalize(X), 0);
-}
-
-vec2 ComputeCorrespondingPoint(const float[9] H, const ivec2 p)
-{
-    vec3 pt;
-    pt.x = H[0] * p.x + H[1] * p.y + H[2];
-    pt.y = H[3] * p.x + H[4] * p.y + H[5];
-    pt.z = H[6] * p.x + H[7] * p.y + H[8];
-    return vec2(pt.x / pt.z, pt.y / pt.z);
-}
-
-
-float[9] ComputeHomography(const Camera ref_camera, const Camera src_camera, const vec4 plane_hypothesis)
-{
-    float[9] H;
-
-    float ref_C[3];
-    float src_C[3];
-    ref_C[0] = -(ref_camera.R[0] * ref_camera.t[0] + ref_camera.R[3] * ref_camera.t[1] + ref_camera.R[6] * ref_camera.t[2]);
-    ref_C[1] = -(ref_camera.R[1] * ref_camera.t[0] + ref_camera.R[4] * ref_camera.t[1] + ref_camera.R[7] * ref_camera.t[2]);
-    ref_C[2] = -(ref_camera.R[2] * ref_camera.t[0] + ref_camera.R[5] * ref_camera.t[1] + ref_camera.R[8] * ref_camera.t[2]);
-    src_C[0] = -(src_camera.R[0] * src_camera.t[0] + src_camera.R[3] * src_camera.t[1] + src_camera.R[6] * src_camera.t[2]);
-    src_C[1] = -(src_camera.R[1] * src_camera.t[0] + src_camera.R[4] * src_camera.t[1] + src_camera.R[7] * src_camera.t[2]);
-    src_C[2] = -(src_camera.R[2] * src_camera.t[0] + src_camera.R[5] * src_camera.t[1] + src_camera.R[8] * src_camera.t[2]);
-
-    float R_relative[9];
-    float C_relative[3];
-    float t_relative[3];
-    R_relative[0] = src_camera.R[0] * ref_camera.R[0] + src_camera.R[1] * ref_camera.R[1] + src_camera.R[2] *ref_camera.R[2];
-    R_relative[1] = src_camera.R[0] * ref_camera.R[3] + src_camera.R[1] * ref_camera.R[4] + src_camera.R[2] *ref_camera.R[5];
-    R_relative[2] = src_camera.R[0] * ref_camera.R[6] + src_camera.R[1] * ref_camera.R[7] + src_camera.R[2] *ref_camera.R[8];
-    R_relative[3] = src_camera.R[3] * ref_camera.R[0] + src_camera.R[4] * ref_camera.R[1] + src_camera.R[5] *ref_camera.R[2];
-    R_relative[4] = src_camera.R[3] * ref_camera.R[3] + src_camera.R[4] * ref_camera.R[4] + src_camera.R[5] *ref_camera.R[5];
-    R_relative[5] = src_camera.R[3] * ref_camera.R[6] + src_camera.R[4] * ref_camera.R[7] + src_camera.R[5] *ref_camera.R[8];
-    R_relative[6] = src_camera.R[6] * ref_camera.R[0] + src_camera.R[7] * ref_camera.R[1] + src_camera.R[8] *ref_camera.R[2];
-    R_relative[7] = src_camera.R[6] * ref_camera.R[3] + src_camera.R[7] * ref_camera.R[4] + src_camera.R[8] *ref_camera.R[5];
-    R_relative[8] = src_camera.R[6] * ref_camera.R[6] + src_camera.R[7] * ref_camera.R[7] + src_camera.R[8] *ref_camera.R[8];
-    C_relative[0] = (ref_C[0] - src_C[0]);
-    C_relative[1] = (ref_C[1] - src_C[1]);
-    C_relative[2] = (ref_C[2] - src_C[2]);
-    t_relative[0] = src_camera.R[0] * C_relative[0] + src_camera.R[1] * C_relative[1] + src_camera.R[2] * C_relative[2];
-    t_relative[1] = src_camera.R[3] * C_relative[0] + src_camera.R[4] * C_relative[1] + src_camera.R[5] * C_relative[2];
-    t_relative[2] = src_camera.R[6] * C_relative[0] + src_camera.R[7] * C_relative[1] + src_camera.R[8] * C_relative[2];
-
-    H[0] = R_relative[0] - t_relative[0] * plane_hypothesis.x / plane_hypothesis.w;
-    H[1] = R_relative[1] - t_relative[0] * plane_hypothesis.y / plane_hypothesis.w;
-    H[2] = R_relative[2] - t_relative[0] * plane_hypothesis.z / plane_hypothesis.w;
-    H[3] = R_relative[3] - t_relative[1] * plane_hypothesis.x / plane_hypothesis.w;
-    H[4] = R_relative[4] - t_relative[1] * plane_hypothesis.y / plane_hypothesis.w;
-    H[5] = R_relative[5] - t_relative[1] * plane_hypothesis.z / plane_hypothesis.w;
-    H[6] = R_relative[6] - t_relative[2] * plane_hypothesis.x / plane_hypothesis.w;
-    H[7] = R_relative[7] - t_relative[2] * plane_hypothesis.y / plane_hypothesis.w;
-    H[8] = R_relative[8] - t_relative[2] * plane_hypothesis.z / plane_hypothesis.w;
-
-    float tmp[9];
-    tmp[0] = H[0] / ref_camera.K[0];
-    tmp[1] = H[1] / ref_camera.K[4];
-    tmp[2] = -H[0] * ref_camera.K[2] / ref_camera.K[0] - H[1] * ref_camera.K[5] / ref_camera.K[4] + H[2];
-    tmp[3] = H[3] / ref_camera.K[0];
-    tmp[4] = H[4] / ref_camera.K[4];
-    tmp[5] = -H[3] * ref_camera.K[2] / ref_camera.K[0] - H[4] * ref_camera.K[5] / ref_camera.K[4] + H[5];
-    tmp[6] = H[6] / ref_camera.K[0];
-    tmp[7] = H[7] / ref_camera.K[4];
-    tmp[8] = -H[6] * ref_camera.K[2] / ref_camera.K[0] - H[7] * ref_camera.K[5] / ref_camera.K[4] + H[8];
-
-    H[0] = src_camera.K[0] * tmp[0] + src_camera.K[2] * tmp[6];
-    H[1] = src_camera.K[0] * tmp[1] + src_camera.K[2] * tmp[7];
-    H[2] = src_camera.K[0] * tmp[2] + src_camera.K[2] * tmp[8];
-    H[3] = src_camera.K[4] * tmp[3] + src_camera.K[5] * tmp[6];
-    H[4] = src_camera.K[4] * tmp[4] + src_camera.K[5] * tmp[7];
-    H[5] = src_camera.K[4] * tmp[5] + src_camera.K[5] * tmp[8];
-    H[6] = src_camera.K[8] * tmp[6];
-    H[7] = src_camera.K[8] * tmp[7];
-    H[8] = src_camera.K[8] * tmp[8];
-    return H;
-}
-
 vec4 TransformNormal2RefCam(const Camera camera, vec4 plane_hypothesis)
 {
     vec4 transformed_normal;
@@ -234,99 +40,6 @@ vec4 TransformNormal2RefCam(const Camera camera, vec4 plane_hypothesis)
     transformed_normal.z = camera.R[6] * plane_hypothesis.x + camera.R[7] * plane_hypothesis.y + camera.R[8] * plane_hypothesis.z;
     transformed_normal.w = plane_hypothesis.w;
     return transformed_normal;
-}
-
-float ComputeBilateralWeight(const float x_dist, const float y_dist, const float pix, const float center_pix, const float sigma_spatial, const float sigma_color)
-{
-    const float spatial_dist = sqrt(x_dist * x_dist + y_dist * y_dist);
-    const float color_dist = abs(pix - center_pix);
-    return exp(-spatial_dist / (2.0f * sigma_spatial* sigma_spatial) - color_dist / (2.0f * sigma_color * sigma_color));
-}
-
-float ComputeBilateralNCC(const int ref_idx, const int src_idx, const ivec2 p, const vec4 plane_hypothesis)
-{
-    Camera src_camera = get_camera(src_idx);
-    Camera ref_camera = get_camera(ref_idx);
-
-    const float cost_max = 2.0f;
-    int radius = pcs.params.patch_size / 2;
-
-    float H[9];
-    H = ComputeHomography(ref_camera, src_camera, plane_hypothesis);
-    vec2 pt = ComputeCorrespondingPoint(H, p);
-    if (pt.x >= src_camera.width || pt.x < 0.0f || pt.y >= src_camera.height || pt.y < 0.0f) {
-        return cost_max;
-    }
-
-    float cost = 0.0f;
-    {
-        float sum_ref = 0.0f;
-        float sum_ref_ref = 0.0f;
-        float sum_src = 0.0f;
-        float sum_src_src = 0.0f;
-        float sum_ref_src = 0.0f;
-        float bilateral_weight_sum = 0.0f;
-        const float ref_center_pix = get_pixel_from_image(ref_idx, p);
-
-        for (int i = -radius; i < radius + 1; i += pcs.params.radius_increment) {
-            float sum_ref_row = 0.0f;
-            float sum_src_row = 0.0f;
-            float sum_ref_ref_row = 0.0f;
-            float sum_src_src_row = 0.0f;
-            float sum_ref_src_row = 0.0f;
-            float bilateral_weight_sum_row = 0.0f;
-
-            for (int j = -radius; j < radius + 1; j += pcs.params.radius_increment) {
-                const ivec2 ref_pt = ivec2(p.x + i, p.y + j);
-                const float ref_pix = get_pixel_from_image(ref_idx, ref_pt);
-                vec2 src_pt = ComputeCorrespondingPoint(H, ref_pt);
-                const float src_pix = get_pixel_from_image(src_idx, src_pt);
-
-                float weight = ComputeBilateralWeight(i, j, ref_pix, ref_center_pix, pcs.params.sigma_spatial, pcs.params.sigma_color);
-
-                sum_ref_row += weight * ref_pix;
-                sum_ref_ref_row += weight * ref_pix * ref_pix;
-                sum_src_row += weight * src_pix;
-                sum_src_src_row += weight * src_pix * src_pix;
-                sum_ref_src_row += weight * ref_pix * src_pix;
-                bilateral_weight_sum_row += weight;
-            }
-
-            sum_ref += sum_ref_row;
-            sum_ref_ref += sum_ref_ref_row;
-            sum_src += sum_src_row;
-            sum_src_src += sum_src_src_row;
-            sum_ref_src += sum_ref_src_row;
-            bilateral_weight_sum += bilateral_weight_sum_row;
-        }
-        const float inv_bilateral_weight_sum = 1.0f / bilateral_weight_sum;
-        sum_ref *= inv_bilateral_weight_sum;
-        sum_ref_ref *= inv_bilateral_weight_sum;
-        sum_src *= inv_bilateral_weight_sum;
-        sum_src_src *= inv_bilateral_weight_sum;
-        sum_ref_src *= inv_bilateral_weight_sum;
-
-        const float var_ref = sum_ref_ref - sum_ref * sum_ref;
-        const float var_src = sum_src_src - sum_src * sum_src;
-
-        const float kMinVar = 1e-5f;
-        if (var_ref < kMinVar || var_src < kMinVar) {
-            return cost = cost_max;
-        } else {
-            const float covar_src_ref = sum_ref_src - sum_ref * sum_src;
-            const float var_ref_src = sqrt(var_ref * var_src);
-            return cost = max(0.0f, min(cost_max, 1.0f - covar_src_ref / var_ref_src));
-        }
-    }
-}
-
-float[32] init_array(float value) {
-    float arr[32];
-    arr[0] = value;
-    for (int i = 1; i < 32; ++i) {
-        arr[i] = 0.0;
-    }
-    return arr;
 }
 
 float ComputeMultiViewInitialCostandSelectedViews(ivec2 p, vec4 plane_hypothesis, int center)
@@ -369,35 +82,6 @@ float ComputeMultiViewInitialCostandSelectedViews(ivec2 p, vec4 plane_hypothesis
     }
 }
 
-vec4 GenerateRandomNormal(const Camera camera, vec2 p, float depth)
-{
-    vec4 normal;
-    float q1 = 1.0f;
-    float q2 = 1.0f;
-    float s = 2.0f;
-    while (s >= 1.0f) {
-        q1 = 2.0f * rand() -1.0f;
-        q2 = 2.0f * rand() - 1.0f;
-        s = q1 * q1 + q2 * q2;
-    }
-    const float sq = sqrt(1.0f - s);
-    normal.x = 2.0f * q1 * sq;
-    normal.y = 2.0f * q2 * sq;
-    normal.z = 1.0f - 2.0f * s;
-    normal.w = 0;
-
-    vec4 view_direction = GetViewDirection(camera, p, depth);
-    float dot_product = dot(normal.xyz, view_direction.xyz);
-    if (dot_product > 0.0f) {
-        normal.x = -normal.x;
-        normal.y = -normal.y;
-        normal.z = - normal.z;
-    }
-
-    return normalize(normal);
-}
-
-
 vec4 GenerateRandomPlaneHypothesis(const Camera camera, vec2 p, float depth_min, float depth_max)
 {
     float depth = rand() * (depth_max - depth_min) + depth_min;
@@ -408,7 +92,7 @@ vec4 GenerateRandomPlaneHypothesis(const Camera camera, vec2 p, float depth_min,
 
 
 void RandomInitialization() {
-    ivec2 p = ivec2(gl_WorkGroupID.x, gl_WorkGroupID.y);
+    ivec2 p = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
     Camera ref_camera = get_camera(0);
     int width = int(ref_camera.width);
     int height = int(ref_camera.height);
@@ -418,6 +102,7 @@ void RandomInitialization() {
     }
 
     int center = int(p.y * width + p.x);
+    random_states[center] = pcs.timestamp;
     // curand_init(clock64(), p.y, p.x, &rand_states[center]);
 
     if (!pcs.params.geom_consistency) {
@@ -432,10 +117,6 @@ void RandomInitialization() {
         plane_hypotheses[center] = plane_hypothesis;
         costs[center] = ComputeMultiViewInitialCostandSelectedViews(p, plane_hypotheses[center], center);
     }
-}
-
-uint index(uvec2 pos) {
-    return (pos.x + (pos.y * uint(width)));
 }
 
 void main() {

@@ -1,0 +1,129 @@
+#include "common.comp"
+
+void sort_small(inout float[21] d, const int n)
+{
+    int j;
+    for (int i = 1; i < n; i++) {
+        float tmp = d[i];
+        for (j = i; j >= 1 && tmp < d[j-1]; j--)
+            d[j] = d[j-1];
+        d[j] = tmp;
+    }
+}
+
+void CheckerboardFilter(const ivec2 p)
+{
+    Camera cam0 = get_camera(0);
+    int width =  int(cam0.width);
+    int height = int(cam0.height);
+    if (p.x >= width || p.y >= height) {
+        return;
+    }
+
+    const int center = p.y * width + p.x;
+
+    float med_filter[21];
+    int index = 0;
+
+    med_filter[index++] = plane_hypotheses[center].w;
+
+    // Left
+    const int left = center - 1;
+    const int leftleft = center - 3;
+
+    // Up
+    const int up = center - width;
+    const int upup = center - 3 * width;
+
+    // Down
+    const int down = center + width;
+    const int downdown = center + 3 * width;
+
+    // Right
+    const int right = center + 1;
+    const int rightright = center + 3;
+
+    if (costs[center] < 0.001f) {
+        return;
+    }
+
+    if (p.y>0) {
+        med_filter[index++] = plane_hypotheses[up].w;
+    }
+    if (p.y>2) {
+        med_filter[index++] = plane_hypotheses[upup].w;
+    }
+    if (p.y>4) {
+        med_filter[index++] = plane_hypotheses[upup-width*2].w;
+    }
+    if (p.y<height-1) {
+        med_filter[index++] = plane_hypotheses[down].w;
+    }
+    if (p.y<height-3) {
+        med_filter[index++] = plane_hypotheses[downdown].w;
+    }
+    if (p.y<height-5) {
+        med_filter[index++] = plane_hypotheses[downdown+width*2].w;
+    }
+    if (p.x>0) {
+        med_filter[index++] = plane_hypotheses[left].w;
+    }
+    if (p.x>2) {
+        med_filter[index++] = plane_hypotheses[leftleft].w;
+    }
+    if (p.x>4) {
+        med_filter[index++] = plane_hypotheses[leftleft-2].w;
+    }
+    if (p.x<width-1) {
+        med_filter[index++] = plane_hypotheses[right].w;
+    }
+    if (p.x<width-3) {
+        med_filter[index++] = plane_hypotheses[rightright].w;
+    }
+    if (p.x<width-5) {
+        med_filter[index++] = plane_hypotheses[rightright+2].w;
+    }
+    if (p.y>0 &&
+        p.x<width-2) {
+        med_filter[index++] = plane_hypotheses[up+2].w;
+    }
+    if (p.y< height-1 &&
+        p.x<width-2) {
+        med_filter[index++] = plane_hypotheses[down+2].w;
+    }
+    if (p.y>0 &&
+        p.x>1)
+    {
+        med_filter[index++] = plane_hypotheses[up-2].w;
+    }
+    if (p.y<height-1 &&
+        p.x>1) {
+        med_filter[index++] = plane_hypotheses[down-2].w;
+    }
+    if (p.x>0 &&
+        p.y>2)
+    {
+        med_filter[index++] = plane_hypotheses[left  - width*2].w;
+    }
+    if (p.x<width-1 &&
+        p.y>2)
+    {
+        med_filter[index++] = plane_hypotheses[right - width*2].w;
+    }
+    if (p.x>0 &&
+        p.y<height-2) {
+        med_filter[index++] = plane_hypotheses[left  + width*2].w;
+    }
+    if (p.x<width-1 &&
+        p.y<height-2) {
+        med_filter[index++] = plane_hypotheses[right + width*2].w;
+    }
+
+    sort_small(med_filter,index);
+    int median_index = index / 2;
+    if (index % 2 == 0) {
+        plane_hypotheses[center].w = (med_filter[median_index-1] + med_filter[median_index]) / 2;
+    } else {
+        plane_hypotheses[center].w = med_filter[median_index];
+    }
+}

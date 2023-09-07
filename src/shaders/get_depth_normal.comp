@@ -1,0 +1,34 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+#include "common.comp"
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+vec4 TransformNormal(const Camera camera, vec4 plane_hypothesis)
+{
+    vec4 transformed_normal;
+    transformed_normal.x = camera.R[0] * plane_hypothesis.x + camera.R[3] * plane_hypothesis.y + camera.R[6] * plane_hypothesis.z;
+    transformed_normal.y = camera.R[1] * plane_hypothesis.x + camera.R[4] * plane_hypothesis.y + camera.R[7] * plane_hypothesis.z;
+    transformed_normal.z = camera.R[2] * plane_hypothesis.x + camera.R[5] * plane_hypothesis.y + camera.R[8] * plane_hypothesis.z;
+    transformed_normal.w = plane_hypothesis.w;
+    return transformed_normal;
+}
+
+void GetDepthandNormal()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
+    Camera cam0 = get_camera(0);
+    const int width =  int(cam0.width);
+    const int height = int(cam0.height);
+
+    if (p.x >= width || p.y >= height) {
+        return;
+    }
+
+    const int center = p.y * width + p.x;
+    plane_hypotheses[center].w = ComputeDepthfromPlaneHypothesis(cam0, plane_hypotheses[center], p);
+    plane_hypotheses[center] = TransformNormal(cam0, plane_hypotheses[center]);
+}
+
+void main() {
+    GetDepthandNormal();
+}

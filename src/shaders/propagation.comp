@@ -1,0 +1,499 @@
+#include "common.comp"
+
+
+float get_depth(int image_idx, ivec2 p){
+    Camera camera = get_camera(image_idx);
+    int offset = image_offset(image_idx);
+    p = max(ivec2(0, 0), p);
+    p = min(ivec2(camera.width, camera.height), p);
+    offset += p.y * int(camera.width) + p.x;
+    return depths[offset];
+}
+
+float get_depth(int image_idx, vec2 p){
+    return get_depth(image_idx, ivec2(p.x+0.5, p.y+0.5));
+}
+
+int FindMinCostIndex(const in float[8] costs, const int n)
+{
+    float min_cost = costs[0];
+    int min_cost_idx = 0;
+    for (int idx = 1; idx < n; ++idx) {
+        if (costs[idx] <= min_cost) {
+            min_cost = costs[idx];
+            min_cost_idx = idx;
+        }
+    }
+    return min_cost_idx;
+}
+
+float ComputeGeomConsistencyCost(const int depth_idx, const Camera ref_camera, const Camera src_camera, const vec4 plane_hypothesis, const ivec2 p)
+{
+    const float max_cost = 5.0f;
+
+    float depth = ComputeDepthfromPlaneHypothesis(ref_camera, plane_hypothesis, p);
+    vec3 forward_point = Get3DPointonWorld_cu(p.x, p.y, depth, ref_camera);
+
+    vec2 src_pt;
+    float src_d;
+    ProjectonCamera_cu(forward_point, src_camera, src_pt, src_d);
+    const float src_depth = get_depth(depth_idx, src_pt);
+
+    if (src_depth == 0.0f) {
+        return max_cost;
+    }
+
+    vec3 src_3D_pt = Get3DPointonWorld_cu(src_pt.x, src_pt.y, src_depth, src_camera);
+
+    vec2 backward_point;
+    float ref_d;
+    ProjectonCamera_cu(src_3D_pt, ref_camera, backward_point, ref_d);
+
+    const float diff_col = p.x - backward_point.x;
+    const float diff_row = p.y - backward_point.y;
+    return min(max_cost, sqrt(diff_col * diff_col + diff_row * diff_row));
+}
+
+void ComputeMultiViewCostVector(const ivec2 p, const vec4 plane_hypothesis, inout float[32] cost_vector)
+{
+    for (int i = 1; i < pcs.params.num_images; ++i) {
+        cost_vector[i - 1] = ComputeBilateralNCC(0, i, p, plane_hypothesis);
+    }
+}
+
+void TransformPDFToCDF(inout float[32] probs, const int num_probs)
+{
+    float prob_sum = 0.0f;
+    for (int i = 0; i < num_probs; ++i) {
+        prob_sum += probs[i];
+    }
+    const float inv_prob_sum = 1.0f / prob_sum;
+
+    float cum_prob = 0.0f;
+    for (int i = 0; i < num_probs; ++i) {
+        const float prob = probs[i] * inv_prob_sum;
+        cum_prob += prob;
+        probs[i] = cum_prob;
+    }
+}
+
+void Mat3DotVec3(const float mat[9], const vec4 vec, out vec4 result)
+{
+  result.x = mat[0] * vec.x + mat[1] * vec.y + mat[2] * vec.z;
+  result.y = mat[3] * vec.x + mat[4] * vec.y + mat[5] * vec.z;
+  result.z = mat[6] * vec.x + mat[7] * vec.y + mat[8] * vec.z;
+}
+
+vec4 GeneratePerturbedNormal(const Camera camera, const ivec2 p, const vec4 normal, const float perturbation)
+{
+    vec4 view_direction = GetViewDirection(camera, p, 1.0f);
+
+    const float a1 = (rand() - 0.5f) * perturbation;
+    const float a2 = (rand() - 0.5f) * perturbation;
+    const float a3 = (rand() - 0.5f) * perturbation;
+
+    const float sin_a1 = sin(a1);
+    const float sin_a2 = sin(a2);
+    const float sin_a3 = sin(a3);
+    const float cos_a1 = cos(a1);
+    const float cos_a2 = cos(a2);
+    const float cos_a3 = cos(a3);
+
+    float R[9];
+    R[0] = cos_a2 * cos_a3;
+    R[1] = cos_a3 * sin_a1 * sin_a2 - cos_a1 * sin_a3;
+    R[2] = sin_a1 * sin_a3 + cos_a1 * cos_a3 * sin_a2;
+    R[3] = cos_a2 * sin_a3;
+    R[4] = cos_a1 * cos_a3 + sin_a1 * sin_a2 * sin_a3;
+    R[5] = cos_a1 * sin_a2 * sin_a3 - cos_a3 * sin_a1;
+    R[6] = -sin_a2;
+    R[7] = cos_a2 * sin_a1;
+    R[8] = cos_a1 * cos_a2;
+
+    vec4 normal_perturbed;
+    Mat3DotVec3(R, normal, normal_perturbed);
+
+    if (dot(normal_perturbed, view_direction) >= 0.0f) {
+        normal_perturbed = normal;
+    }
+
+    return normalize(normal_perturbed);
+}
+
+float GetDistance2Origin(const Camera camera, const ivec2 p, const float depth, const vec4 normal)
+{
+    vec3 X = Get3DPoint(camera, p, depth);
+    return -(normal.x * X[0] + normal.y * X[1] + normal.z * X[2]);
+}
+
+void PlaneHypothesisRefinement(inout vec4 plane_hypothesis, inout float depth, inout float cost, const float[32] view_weights, const float weight_norm, const ivec2 p)
+{
+    float perturbation = 0.02f;
+
+    float depth_rand = rand() * (pcs.params.depth_max - pcs.params.depth_min) + pcs.params.depth_min;
+    vec4 plane_hypothesis_rand = GenerateRandomNormal(get_camera(0), p, depth);
+    float depth_perturbed = depth;
+    const float depth_min_perturbed = (1 - perturbation) * depth_perturbed;
+    const float depth_max_perturbed = (1 + perturbation) * depth_perturbed;
+    do {
+        depth_perturbed = rand() * (depth_max_perturbed - depth_min_perturbed) + depth_min_perturbed;
+    } while (depth_perturbed < pcs.params.depth_min && depth_perturbed > pcs.params.depth_max);
+    vec4 plane_hypothesis_perturbed = GeneratePerturbedNormal(get_camera(0), p, plane_hypothesis, perturbation * M_PI);
+
+    const int num_planes = 5;
+    float depths[num_planes] = {depth_rand, depth, depth_rand, depth, depth_perturbed};
+    vec4 normals[num_planes] = {plane_hypothesis, plane_hypothesis_rand, plane_hypothesis_rand, plane_hypothesis_perturbed, plane_hypothesis};
+
+    for (int i = 0; i < num_planes; ++i) {
+        float cost_vector[32] = init_array(2.0);
+        vec4 temp_plane_hypothesis = normals[i];
+        temp_plane_hypothesis.w = GetDistance2Origin(get_camera(0), p, depths[i], temp_plane_hypothesis);
+        ComputeMultiViewCostVector(p, temp_plane_hypothesis, cost_vector);
+
+        float temp_cost = 0.0f;
+        for (int j = 0; j < pcs.params.num_images - 1; ++j) {
+            if (view_weights[j] > 0) {
+                if (pcs.params.geom_consistency) {
+                    temp_cost += view_weights[j] * (cost_vector[j] + 0.1f * ComputeGeomConsistencyCost(j+1, get_camera(0), get_camera(j+1), temp_plane_hypothesis, p));
+                }
+                else {
+                    temp_cost += view_weights[j] * cost_vector[j];
+                }
+            }
+        }
+        temp_cost /= weight_norm;
+
+        float depth_before = ComputeDepthfromPlaneHypothesis(get_camera(0), temp_plane_hypothesis, p);
+        if (depth_before >= pcs.params.depth_min && depth_before <= pcs.params.depth_max && temp_cost < cost) {
+            depth = depth_before;
+            plane_hypothesis = temp_plane_hypothesis;
+            cost = temp_cost;
+        }
+    }
+}
+
+void CheckerboardPropagation(const ivec2 p, const int iter)
+{
+    Camera camera0 = get_camera(0);
+    int width =  int(camera0.width);
+    int height = int(camera0.height);
+
+    if (p.x >= width || p.y >= height) {
+        return;
+    }
+
+    const int center = p.y * width + p.x;
+    int left_near = center - 1;
+    int left_far = center - 3;
+    int right_near = center + 1;
+    int right_far = center + 3;
+    int up_near = center - width;
+    int up_far = center - 3 * width;
+    int down_near = center + width;
+    int down_far = center + 3 * width;
+
+    // Adaptive Checkerboard Sampling
+    // TODO: init array
+    float cost_array[8][32];
+    // 0 -- up_near, 1 -- up_far, 2 -- down_near, 3 -- down_far, 4 -- left_near, 5 -- left_far, 6 -- right_near, 7 -- right_far
+    bool flag[8] = init_flags(false);
+    int num_valid_pixels = 0;
+
+    float costMin;
+    int costMinPoint;
+
+    // up_far
+    if (p.y > 2) {
+        flag[1] = true;
+        num_valid_pixels++;
+        costMin = costs[up_far];
+        costMinPoint = up_far;
+        for (int i = 1; i < 11; ++i) {
+            if (p.y > 2 + 2 * i) {
+                int pointTemp = up_far - 2 * i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        up_far = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[up_far], cost_array[1]);
+    }
+
+    // down_far
+    if (p.y < height - 3) {
+        flag[3] = true;
+        num_valid_pixels++;
+        costMin = costs[down_far];
+        costMinPoint = down_far;
+        for (int i = 1; i < 11; ++i) {
+            if (p.y < height - 3 - 2 * i) {
+                int pointTemp = down_far + 2 * i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        down_far = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[down_far], cost_array[3]);
+    }
+
+    // left_far
+    if (p.x > 2) {
+        flag[5] = true;
+        num_valid_pixels++;
+        costMin = costs[left_far];
+        costMinPoint = left_far;
+        for (int i = 1; i < 11; ++i) {
+            if (p.x > 2 + 2 * i) {
+                int pointTemp = left_far - 2 * i;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        left_far = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[left_far], cost_array[5]);
+    }
+
+    // right_far
+    if (p.x < width - 3) {
+        flag[7] = true;
+        num_valid_pixels++;
+        costMin = costs[right_far];
+        costMinPoint = right_far;
+        for (int i = 1; i < 11; ++i) {
+            if (p.x < width - 3 - 2 * i) {
+                int pointTemp = right_far + 2 * i;
+                if (costMin < costs[pointTemp]) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        right_far = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[right_far], cost_array[7]);
+    }
+
+    // up_near
+    if (p.y > 0) {
+        flag[0] = true;
+        num_valid_pixels++;
+        costMin = costs[up_near];
+        costMinPoint = up_near;
+        for (int i = 0; i < 3; ++i) {
+            if (p.y > 1 + i && p.x > i) {
+                int pointTemp = up_near - (1 + i) * width - i;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+            if (p.y > 1 + i && p.x < width - 1 - i) {
+                int pointTemp = up_near - (1 + i) * width + i;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        up_near = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[up_near], cost_array[0]);
+    }
+
+    // down_near
+    if (p.y < height - 1) {
+        flag[2] = true;
+        num_valid_pixels++;
+        costMin = costs[down_near];
+        costMinPoint = down_near;
+        for (int i = 0; i < 3; ++i) {
+            if (p.y < height - 2 - i && p.x > i) {
+                int pointTemp = down_near + (1 + i) * width - i;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+            if (p.y < height - 2 - i && p.x < width - 1 - i) {
+                int pointTemp = down_near + (1 + i) * width + i;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        down_near = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[down_near], cost_array[2]);
+    }
+
+    // left_near
+    if (p.x > 0) {
+        flag[4] = true;
+        num_valid_pixels++;
+        costMin = costs[left_near];
+        costMinPoint = left_near;
+        for (int i = 0; i < 3; ++i) {
+            if (p.x > 1 + i && p.y > i) {
+                int pointTemp = left_near - (1 + i) - i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+            if (p.x > 1 + i && p.y < height - 1 - i) {
+                int pointTemp = left_near - (1 + i) + i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        left_near = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[left_near], cost_array[4]);
+    }
+
+    // right_near
+    if (p.x < width - 1) {
+        flag[6] = true;
+        num_valid_pixels++;
+        costMin = costs[right_near];
+        costMinPoint = right_near;
+        for (int i = 0; i < 3; ++i) {
+            if (p.x < width - 2 - i && p.y > i) {
+                int pointTemp = right_near + (1 + i) - i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+            if (p.x < width - 2 - i && p.y < height - 1- i) {
+                int pointTemp = right_near + (1 + i) + i * width;
+                if (costs[pointTemp] < costMin) {
+                    costMin = costs[pointTemp];
+                    costMinPoint = pointTemp;
+                }
+            }
+        }
+        right_near = costMinPoint;
+        ComputeMultiViewCostVector(p, plane_hypotheses[right_near], cost_array[6]);
+    }
+    const int positions[8] = {up_near, up_far, down_near, down_far, left_near, left_far, right_near, right_far};
+
+    // Multi-hypothesis Joint View Selection
+    float view_weights[32] = init_array(0.0);
+    float view_selection_priors[32] = init_array(0.0);
+    int neighbor_positions[4] = {center - width, center + width, center - 1, center + 1};
+    for (int i = 0; i < 4; ++i) {
+        if (flag[2 * i]) {
+            for (int j = 0; j < pcs.params.num_images - 1; ++j) {
+                if (isSet(selected_views[neighbor_positions[i]], j) == 1) {
+                    view_selection_priors[j] += 0.9f;
+                } else {
+                    view_selection_priors[j] += 0.1f;
+                }
+            }
+        }
+    }
+
+    float sampling_probs[32] = init_array(0.0);
+    float cost_threshold = 0.8 * exp((iter) * (iter) / (-90.0f));
+    for (int i = 0; i < pcs.params.num_images - 1; i++) {
+        float count = 0;
+        int count_false = 0;
+        float tmpw = 0;
+        for (int j = 0; j < 8; j++) {
+            if (cost_array[j][i] < cost_threshold) {
+                tmpw += exp(cost_array[j][i] * cost_array[j][i] / (-0.18f));
+                count++;
+            }
+            if (cost_array[j][i] > 1.2f) {
+                count_false++;
+            }
+        }
+        if (count > 2 && count_false < 3) {
+            sampling_probs[i] = tmpw / count;
+        }
+        else if (count_false < 3) {
+            sampling_probs[i] = exp(cost_threshold * cost_threshold / (-0.32f));
+        }
+        sampling_probs[i] = sampling_probs[i] * view_selection_priors[i];
+    }
+
+    TransformPDFToCDF(sampling_probs, pcs.params.num_images - 1);
+    for (int s = 0; s < 15; ++s) { // sample is a reserved keyword
+        const float rand_prob = rand() - FLT_EPSILON;
+
+        for (int image_id = 0; image_id < pcs.params.num_images - 1; ++image_id) {
+            const float prob = sampling_probs[image_id];
+            if (prob > rand_prob) {
+                view_weights[image_id] += 1.0f;
+                break;
+            }
+        }
+    }
+
+    uint temp_selected_views = 0;
+    int num_selected_view = 0;
+    float weight_norm = 0;
+    for (int i = 0; i < pcs.params.num_images - 1; ++i) {
+        if (view_weights[i] > 0) {
+            temp_selected_views = setBit(temp_selected_views, i);
+            weight_norm += view_weights[i];
+            num_selected_view++;
+        }
+    }
+
+    float final_costs[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < pcs.params.num_images - 1; ++j) {
+            if (view_weights[j] > 0) {
+                if (pcs.params.geom_consistency) {
+                    if (flag[i]) {
+                        final_costs[i] += view_weights[j] * (cost_array[i][j] + 0.1f * ComputeGeomConsistencyCost(j+1, get_camera(0), get_camera(j+1), plane_hypotheses[positions[i]], p));
+                    }
+                    else {
+                        final_costs[i] += view_weights[j] * (cost_array[i][j] + 0.1f * 5.0f);
+                    }
+                }
+                else {
+                    final_costs[i] += view_weights[j] * cost_array[i][j];
+                }
+            }
+        }
+        final_costs[i] /= weight_norm;
+    }
+
+    const int min_cost_idx = FindMinCostIndex(final_costs, 8);
+
+    float cost_vector_now[32] = init_array(2.0);
+    ComputeMultiViewCostVector(p, plane_hypotheses[center], cost_vector_now);
+    float cost_now = 0.0f;
+    for (int i = 0; i < pcs.params.num_images - 1; ++i) {
+        if (pcs.params.geom_consistency) {
+            cost_now += view_weights[i] * (cost_vector_now[i] + 0.1f * ComputeGeomConsistencyCost(i+1, get_camera(0), get_camera(i+1), plane_hypotheses[center], p));
+        }
+        else {
+            cost_now += view_weights[i] * cost_vector_now[i];
+        }
+    }
+    cost_now /= weight_norm;
+    costs[center] = cost_now;
+    float depth_now = ComputeDepthfromPlaneHypothesis(get_camera(0), plane_hypotheses[center], p);
+
+    if (flag[min_cost_idx]) {
+        float depth_before = ComputeDepthfromPlaneHypothesis(get_camera(0), plane_hypotheses[positions[min_cost_idx]], p);
+
+        if (depth_before >= pcs.params.depth_min && depth_before <= pcs.params.depth_max && final_costs[min_cost_idx] < cost_now) {
+            depth_now = depth_before;
+            plane_hypotheses[center] = plane_hypotheses[positions[min_cost_idx]];
+            costs[center] = final_costs[min_cost_idx];
+            selected_views[center] = temp_selected_views;
+        }
+    }
+
+    PlaneHypothesisRefinement(plane_hypotheses[center], depth_now, costs[center], view_weights, weight_norm, p);
+}

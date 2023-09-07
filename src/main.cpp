@@ -19,16 +19,16 @@ int main(int argc, char** argv) {
     bool geom_consistency = false;
     for (size_t i = 0; i < num_images; ++i) {
         helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
-        // TODO: remove this
         break;
     }
     return 0;
+
     geom_consistency = true;
     for (size_t i = 0; i < num_images; ++i) {
         helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
     }
 
-    // RunFusion(dense_folder, problems, geom_consistency);
+    helpers::RunFusion(dense_folder, problems, geom_consistency);
 
     return 0;
 }

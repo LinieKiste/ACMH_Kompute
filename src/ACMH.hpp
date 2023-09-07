@@ -28,6 +28,8 @@ struct Parameters {
 
 struct PushConstants {
   Parameters params;
+  int iter;
+  float timestamp;
 };
 
 class ACMH {
@@ -44,6 +46,7 @@ public:
   int GetReferenceImageWidth();
   int GetReferenceImageHeight();
   glm::vec4 GetPlaneHypothesis(const int index);
+  void SetPlaneHypothesis(const int index, glm::vec4 hyp);
   float GetCost(const int index);
 
   kp::Manager mgr;
@@ -63,7 +66,16 @@ private:
     std::shared_ptr<kp::TensorT<float>> camera_tensor;
     std::shared_ptr<kp::TensorT<float>> random_states_tensor;
     std::shared_ptr<kp::TensorT<uint>> selected_views_tensor;
-  } tensors;
+    std::shared_ptr<kp::TensorT<float>> depths_tensor;
+    } tensors;
+  struct {
+    std::vector<uint32_t> random_init;
+    std::vector<uint32_t> black_pixel_update;
+    std::vector<uint32_t> red_pixel_update;
+    std::vector<uint32_t> get_depth_and_normal;
+    std::vector<uint32_t> black_filter;
+    std::vector<uint32_t> red_filter;
+  } shaders;
 
-  Parameters params;
-};
+    Parameters params;
+  };
