@@ -102,8 +102,7 @@ void RandomInitialization() {
     }
 
     int center = int(p.y * width + p.x);
-    random_states[center] = pcs.timestamp;
-    // curand_init(clock64(), p.y, p.x, &rand_states[center]);
+    random_states[center] = pcs.seed;
 
     if (!pcs.params.geom_consistency) {
         plane_hypotheses[center] = GenerateRandomPlaneHypothesis(ref_camera, p, pcs.params.depth_min, pcs.params.depth_max);

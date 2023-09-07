@@ -19,9 +19,7 @@ int main(int argc, char** argv) {
     bool geom_consistency = false;
     for (size_t i = 0; i < num_images; ++i) {
         helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
-        break;
     }
-    return 0;
 
     geom_consistency = true;
     for (size_t i = 0; i < num_images; ++i) {

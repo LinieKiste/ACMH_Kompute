@@ -5,7 +5,7 @@ std::vector<uint32_t> loadShader(const std::string &name) {
     std::stringstream in_path, spv_path, command;
     in_path << "./src/shaders/" << name;
     spv_path << "./spv/" << name << ".spv";
-    command << "glslangValidator --quiet -V " << in_path.str() << " -o " << spv_path.str();
+    command << "glslangValidator --quiet -V -gVS " << in_path.str() << " -o " << spv_path.str();
 
     if (system(command.str().c_str())) {
       throw std::runtime_error("Error running glslangValidator command");

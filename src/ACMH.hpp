@@ -56,7 +56,7 @@ public:
 private:
   SfM sfm;
   std::vector<float> pixels;
-  std::vector<cv::Mat> depths;
+  std::vector<cv::Mat_<float>> depths;
 
   std::vector<std::shared_ptr<kp::Tensor>> kp_params;
   struct {

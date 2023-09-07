@@ -193,13 +193,12 @@ void ACMH::RunPatchMatch() {
 #endif
 
   // RANDOM INITIALIZATION
-  float timestamp = 0.75; // magic number
+  float seed = 0.75; // magic number
   auto sequence = mgr.sequence();
   sequence->record<kp::OpTensorSyncDevice>(kp_params)
       ->record<kp::OpAlgoDispatch>(
-          algo_random_init, std::vector<PushConstants>{{params, 0, timestamp}})
+          algo_random_init, std::vector<PushConstants>{{params, 0, seed}})
       ->eval();
-
 
   auto algo_black_pixel_update =
       mgr.algorithm(kp_params, shaders.black_pixel_update,
@@ -214,20 +213,10 @@ void ACMH::RunPatchMatch() {
 
   // TODO: use push constant to distinguish red and black
   for (int i = 0; i < max_iterations; ++i) {
-#ifdef LOAD_RENDERDOC
-  if (rdoc_api)
-    rdoc_api->StartFrameCapture(NULL, NULL);
-#endif
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_black_pixel_update,
                                      std::vector<PushConstants>({{params, i}}))
         ->eval();
-
-#ifdef LOAD_RENDERDOC
-  if (rdoc_api)
-    rdoc_api->EndFrameCapture(NULL, NULL);
-#endif
-  break;
 
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_red_pixel_update,
@@ -236,7 +225,6 @@ void ACMH::RunPatchMatch() {
     printf("iteration: %d\n", i);
   }
 
-/*
   auto algo_depth_normal =
       mgr.algorithm(kp_params, shaders.get_depth_and_normal,
                     kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y,
@@ -258,6 +246,10 @@ void ACMH::RunPatchMatch() {
                                    grid_size_checkerboard.z}),
                                    {}, std::vector<PushConstants>{{params, 0}});
 
+#ifdef LOAD_RENDERDOC
+  if (rdoc_api)
+    rdoc_api->StartFrameCapture(NULL, NULL);
+#endif
   // TODO: use push constants to distinguish red and black
   mgr.sequence()
       ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
@@ -266,7 +258,11 @@ void ACMH::RunPatchMatch() {
       ->record<kp::OpAlgoDispatch>(algo_red_pixel_filter,
                                    std::vector<PushConstants>({{params, 0}}))
       ->eval();
-*/
+
+#ifdef LOAD_RENDERDOC
+  if (rdoc_api)
+    rdoc_api->EndFrameCapture(NULL, NULL);
+#endif
        
   mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
   this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();

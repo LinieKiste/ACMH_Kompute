@@ -1,5 +1,6 @@
 #include "common.comp"
 
+// TODO: something is out of bounds here...
 
 float get_depth(int image_idx, ivec2 p){
     Camera camera = get_camera(image_idx);
@@ -82,6 +83,7 @@ void Mat3DotVec3(const float mat[9], const vec4 vec, out vec4 result)
   result.x = mat[0] * vec.x + mat[1] * vec.y + mat[2] * vec.z;
   result.y = mat[3] * vec.x + mat[4] * vec.y + mat[5] * vec.z;
   result.z = mat[6] * vec.x + mat[7] * vec.y + mat[8] * vec.z;
+  result.w = 0.0;
 }
 
 vec4 GeneratePerturbedNormal(const Camera camera, const ivec2 p, const vec4 normal, const float perturbation)
@@ -193,8 +195,14 @@ void CheckerboardPropagation(const ivec2 p, const int iter)
     int down_far = center + 3 * width;
 
     // Adaptive Checkerboard Sampling
-    // TODO: init array
     float cost_array[8][32];
+    for(int i = 0; i<8; i++){
+        for(int j = 0; j<32; j++){
+            cost_array[i][j] = 0.0;
+        }
+    }
+    cost_array[0][0] = 2.0;
+
     // 0 -- up_near, 1 -- up_far, 2 -- down_near, 3 -- down_far, 4 -- left_near, 5 -- left_far, 6 -- right_near, 7 -- right_far
     bool flag[8] = init_flags(false);
     int num_valid_pixels = 0;

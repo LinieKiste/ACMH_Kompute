@@ -11,6 +11,14 @@ void sort_small(inout float[21] d, const int n)
     }
 }
 
+float[21] init_filter(){
+    float[21] result;
+    for (int i = 1; i < 21; ++i) {
+        result[i] = 0.0;
+    }
+    return result;
+}
+
 void CheckerboardFilter(const ivec2 p)
 {
     Camera cam0 = get_camera(0);
@@ -22,7 +30,7 @@ void CheckerboardFilter(const ivec2 p)
 
     const int center = p.y * width + p.x;
 
-    float med_filter[21];
+    float med_filter[21] = init_filter();
     int index = 0;
 
     med_filter[index++] = plane_hypotheses[center].w;

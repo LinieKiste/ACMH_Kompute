@@ -27,7 +27,7 @@ struct Parameters {
 layout(push_constant) uniform PushConstants {
     Parameters params;
     int iter;
-    float timestamp;
+    float seed;
     } pcs;
 
 struct Camera {
@@ -67,7 +67,6 @@ float rand(){
     float tmp = fract(tan(distance(xy*PHI, xy)*seed)*xy.x);
     random_states[rd_idx] = seed + 1; // if next seed is 0, we always generate 0
     return tmp;
-    // return fract(sin(dot(center.xy ,vec2(12.9898,78.233))) * 43758.5453);
 }
 
 int image_offset(int image_idx){
