@@ -14,7 +14,6 @@ if(false AND CMAKE_COMPILER_IS_GNUCXX)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math -march=native") # extend release-profile with fast-math
 endif()
 
-find_package(glm REQUIRED)
 find_package(OpenCV REQUIRED )
 add_subdirectory(extern/kompute)
 
@@ -37,6 +36,5 @@ add_executable(main
 # Specify target & libraries to link it with
 target_link_libraries(main PRIVATE
     kompute
-    glm
     ${OpenCV_LIBS}
     )
