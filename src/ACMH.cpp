@@ -94,19 +94,6 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   auto random_states_host = std::vector<float>(ref_no_pixels);
   auto selected_views_host = std::vector<uint32_t>(ref_no_pixels);
 
-  // image tensor
-  tensors.image_tensor = mgr.tensor(img_tensor_data);
-  // plane hypotheses tensor
-  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
-  // costs tensor
-  tensors.costs_tensor = mgr.tensor(costs_host);
-  // camera tensor
-  tensors.camera_tensor = mgr.tensor(camera_data_host);
-  // random states tensor
-  tensors.random_states_tensor = mgr.tensorT(random_states_host);
-  // selected views tensor
-  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
-
   std::vector<float> depth_tensor_data;
   if (params.geom_consistency) {
     for (int i = 0; i < num_images; ++i) {
@@ -148,8 +135,22 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   } else {
     depth_tensor_data.resize(ref_no_pixels);
   }
+
+  // image tensor
+  tensors.image_tensor = mgr.tensor(img_tensor_data);
+  // plane hypotheses tensor
+  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
+  // costs tensor
+  tensors.costs_tensor = mgr.tensor(costs_host);
+  // camera tensor
+  tensors.camera_tensor = mgr.tensor(camera_data_host);
+  // random states tensor
+  tensors.random_states_tensor = mgr.tensorT(random_states_host);
+  // selected views tensor
+  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
   // depths tensor
   tensors.depths_tensor = mgr.tensorT(depth_tensor_data);
+
   kp_params = {tensors.image_tensor,         tensors.plane_hypotheses_tensor,
                tensors.costs_tensor,         tensors.camera_tensor,
                tensors.random_states_tensor, tensors.selected_views_tensor,
@@ -213,10 +214,19 @@ void ACMH::RunPatchMatch() {
 
   // TODO: use push constant to distinguish red and black
   for (int i = 0; i < max_iterations; ++i) {
+#ifdef LOAD_RENDERDOC
+  if (rdoc_api && params.geom_consistency)
+    rdoc_api->StartFrameCapture(NULL, NULL);
+#endif
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_black_pixel_update,
                                      std::vector<PushConstants>({{params, i}}))
         ->eval();
+
+#ifdef LOAD_RENDERDOC
+  if (rdoc_api && params.geom_consistency)
+    rdoc_api->EndFrameCapture(NULL, NULL);
+#endif
 
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_red_pixel_update,
@@ -246,10 +256,6 @@ void ACMH::RunPatchMatch() {
                                    grid_size_checkerboard.z}),
                                    {}, std::vector<PushConstants>{{params, 0}});
 
-#ifdef LOAD_RENDERDOC
-  if (rdoc_api)
-    rdoc_api->StartFrameCapture(NULL, NULL);
-#endif
   // TODO: use push constants to distinguish red and black
   mgr.sequence()
       ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
@@ -258,11 +264,6 @@ void ACMH::RunPatchMatch() {
       ->record<kp::OpAlgoDispatch>(algo_red_pixel_filter,
                                    std::vector<PushConstants>({{params, 0}}))
       ->eval();
-
-#ifdef LOAD_RENDERDOC
-  if (rdoc_api)
-    rdoc_api->EndFrameCapture(NULL, NULL);
-#endif
        
   mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
   this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
