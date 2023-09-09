@@ -1,15 +1,12 @@
 #include "ACMH.hpp"
 #include "helpers.hpp"
 #include "Tracy.hpp"
-#include "TracyVulkan.hpp"
 
 // #define LOAD_RENDERDOC
 
 #ifdef LOAD_RENDERDOC
 #include "renderdoc_app.h"
 #endif
-
-namespace fs = std::filesystem;
 
 ACMH::ACMH(std::string dense_folder, int ref_image_id,
            std::vector<int> src_image_ids, Cache cache)
@@ -91,19 +88,6 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   auto random_states_host = std::vector<float>(ref_no_pixels);
   auto selected_views_host = std::vector<uint32_t>(ref_no_pixels);
 
-  // image tensor
-  tensors.image_tensor = mgr.tensor(img_tensor_data);
-  // plane hypotheses tensor
-  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
-  // costs tensor
-  tensors.costs_tensor = mgr.tensor(costs_host);
-  // camera tensor
-  tensors.camera_tensor = mgr.tensor(camera_data_host);
-  // random states tensor
-  tensors.random_states_tensor = mgr.tensorT(random_states_host);
-  // selected views tensor
-  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
-
   std::vector<float> depth_tensor_data;
   if (params.geom_consistency) {
     for (int i = 0; i < num_images; ++i) {
@@ -145,8 +129,22 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   } else {
     depth_tensor_data.resize(ref_no_pixels);
   }
+
+  // image tensor
+  tensors.image_tensor = mgr.tensor(img_tensor_data);
+  // plane hypotheses tensor
+  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
+  // costs tensor
+  tensors.costs_tensor = mgr.tensor(costs_host);
+  // camera tensor
+  tensors.camera_tensor = mgr.tensor(camera_data_host);
+  // random states tensor
+  tensors.random_states_tensor = mgr.tensorT(random_states_host);
+  // selected views tensor
+  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
   // depths tensor
   tensors.depths_tensor = mgr.tensorT(depth_tensor_data);
+
   kp_params = {tensors.image_tensor,         tensors.plane_hypotheses_tensor,
                tensors.costs_tensor,         tensors.camera_tensor,
                tensors.random_states_tensor, tensors.selected_views_tensor,
@@ -170,7 +168,7 @@ void ACMH::RunPatchMatch() {
   grid_size_checkerboard.y = ((height / 2) + BLOCK_H - 1) / BLOCK_H;
   grid_size_checkerboard.z = 1;
 
-  int max_iterations = 3;
+  int max_iterations = params.max_iterations;
 
   auto algo_random_init =
       mgr.algorithm(kp_params, shaders.random_init,
@@ -222,7 +220,7 @@ void ACMH::RunPatchMatch() {
 #endif
   {
     ZoneScopedN("Black pixel update");
-      mgr.sequence()
+      sequence
           ->record<kp::OpAlgoDispatch>(
               algo_black_pixel_update,
               std::vector<PushConstants>({{params, i}}))
@@ -236,7 +234,7 @@ void ACMH::RunPatchMatch() {
 
       {
         ZoneScopedN("Red pixel update");
-        mgr.sequence()
+        sequence
             ->record<kp::OpAlgoDispatch>(
                 algo_red_pixel_update,
                 std::vector<PushConstants>({{params, i}}))
@@ -253,7 +251,7 @@ void ACMH::RunPatchMatch() {
                                    {}, std::vector<PushConstants>{{params, 0}});
   {
     ZoneScopedN("Get depth and normal");
-    mgr.sequence()
+    sequence
         ->record<kp::OpAlgoDispatch>(algo_depth_normal,
                                      std::vector<PushConstants>({{params, 0}}))
         ->eval();
@@ -273,7 +271,7 @@ void ACMH::RunPatchMatch() {
     // TODO: use push constants to distinguish red and black
   {
     ZoneScopedN("Filtering");
-    mgr.sequence()
+    sequence
         ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
                                      std::vector<PushConstants>({{params, 0}}))
         ->eval()
@@ -282,7 +280,7 @@ void ACMH::RunPatchMatch() {
         ->eval();
   }
 
-    mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
+    sequence->record<kp::OpTensorSyncLocal>(kp_params)->eval();
     this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
     this->costs_host = tensors.costs_tensor->vector();
   }
