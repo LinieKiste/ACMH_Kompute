@@ -31,7 +31,6 @@ struct Parameters {
 struct PushConstants {
   Parameters params;
   int iter;
-  float timestamp;
 };
 
 class ACMH {

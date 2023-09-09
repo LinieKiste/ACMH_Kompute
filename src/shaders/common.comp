@@ -1,7 +1,9 @@
+#extension GL_GOOGLE_include_directive : enable
+#include "noise2D.glsl"
+
 #define FLT_EPSILON 1.19209290E-07F
 #define M_PI 3.1415926535897932384626433832795
 float PHI = 1.61803398874989484820459;  // Φ = Golden Ratio   
-#extension GL_EXT_debug_printf : enable
 
 layout (set = 0, binding = 0) buffer images_buf { readonly restrict float images[]; };
 layout (set = 0, binding = 1) buffer plane_buf { vec4 plane_hypotheses[]; };
@@ -27,7 +29,6 @@ struct Parameters {
 layout(push_constant) uniform PushConstants {
     Parameters params;
     int iter;
-    float seed;
     } pcs;
 
 struct Camera {
@@ -63,10 +64,11 @@ float rand(){
     vec2 xy = gl_GlobalInvocationID.xy;
     int rd_idx = int(xy.y * cam0.width + xy.x);
     float seed = random_states[rd_idx];
-    xy += 1; // if xy.x == 0, we always get 0 as an end result and get stuck in a while loop
-    float tmp = fract(tan(distance(xy*PHI, xy)*seed)*xy.x);
-    random_states[rd_idx] = seed + 1; // if next seed is 0, we always generate 0
-    return tmp;
+    xy += seed;
+    random_states[rd_idx] = seed + 1;
+
+    float result = abs(snoise(xy));
+    return result;
 }
 
 int image_offset(int image_idx){

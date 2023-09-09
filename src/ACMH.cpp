@@ -2,7 +2,7 @@
 #include "helpers.hpp"
 #include "Tracy.hpp"
 
-// #define LOAD_RENDERDOC
+#define LOAD_RENDERDOC
 
 #ifdef LOAD_RENDERDOC
 #include "renderdoc_app.h"
@@ -189,15 +189,19 @@ void ACMH::RunPatchMatch() {
 #endif
 
   // RANDOM INITIALIZATION
-  float seed = 0.75; // magic number
-  auto sequence = mgr.sequence();
-  {
-    ZoneScopedN("Random Initialization");
-    sequence->record<kp::OpTensorSyncDevice>(kp_params)
+#ifdef LOAD_RENDERDOC
+      if (rdoc_api)
+        rdoc_api->StartFrameCapture(NULL, NULL);
+#endif
+    mgr.sequence()->record<kp::OpTensorSyncDevice>(kp_params)
         ->record<kp::OpAlgoDispatch>(
-            algo_random_init, std::vector<PushConstants>{{params, 0, seed}})
-        ->eval();
-  }
+            algo_random_init, std::vector<PushConstants>{{params, 0}})
+            ->eval();
+
+#ifdef LOAD_RENDERDOC
+      if (rdoc_api)
+        rdoc_api->EndFrameCapture(NULL, NULL);
+#endif
 
   auto algo_black_pixel_update =
       mgr.algorithm(kp_params, shaders.black_pixel_update,
@@ -214,33 +218,19 @@ void ACMH::RunPatchMatch() {
   {
     ZoneScopedNC("Checkerboard propagation", tracy::Color::DarkRed);
     for (int i = 0; i < max_iterations; ++i) {
-#ifdef LOAD_RENDERDOC
-      if (rdoc_api && params.geom_consistency)
-        rdoc_api->StartFrameCapture(NULL, NULL);
-#endif
   {
-    ZoneScopedN("Black pixel update");
-      sequence
-          ->record<kp::OpAlgoDispatch>(
-              algo_black_pixel_update,
-              std::vector<PushConstants>({{params, i}}))
-          ->eval();
+    ZoneScopedN("Iteration");
+    mgr.sequence()
+        ->record<kp::OpAlgoDispatch>(algo_black_pixel_update,
+                                     std::vector<PushConstants>({{params, i}}))
+        ->eval();
+    mgr.sequence()
+        ->record<kp::OpAlgoDispatch>(algo_red_pixel_update,
+                                     std::vector<PushConstants>({{params, i}}))
+        ->eval();
   }
 
-#ifdef LOAD_RENDERDOC
-      if (rdoc_api && params.geom_consistency)
-        rdoc_api->EndFrameCapture(NULL, NULL);
-#endif
-
-      {
-        ZoneScopedN("Red pixel update");
-        sequence
-            ->record<kp::OpAlgoDispatch>(
-                algo_red_pixel_update,
-                std::vector<PushConstants>({{params, i}}))
-            ->eval();
         printf("iteration: %d\n", i);
-      }
     }
   }
 
@@ -248,10 +238,10 @@ void ACMH::RunPatchMatch() {
       mgr.algorithm(kp_params, shaders.get_depth_and_normal,
                     kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y,
                                    grid_size_randinit.z}),
-                                   {}, std::vector<PushConstants>{{params, 0}});
+                    {}, std::vector<PushConstants>{{params, 0}});
   {
     ZoneScopedN("Get depth and normal");
-    sequence
+    mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_depth_normal,
                                      std::vector<PushConstants>({{params, 0}}))
         ->eval();
@@ -271,16 +261,16 @@ void ACMH::RunPatchMatch() {
     // TODO: use push constants to distinguish red and black
   {
     ZoneScopedN("Filtering");
-    sequence
+    mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
                                      std::vector<PushConstants>({{params, 0}}))
-        ->eval()
-        ->record<kp::OpAlgoDispatch>(algo_red_pixel_filter,
-                                     std::vector<PushConstants>({{params, 0}}))
+                                     ->eval();
+    mgr.sequence()->record<kp::OpAlgoDispatch>(
+        algo_red_pixel_filter, std::vector<PushConstants>({{params, 0}}))
         ->eval();
   }
 
-    sequence->record<kp::OpTensorSyncLocal>(kp_params)->eval();
+    mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
     this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
     this->costs_host = tensors.costs_tensor->vector();
   }
@@ -295,7 +285,6 @@ int ACMH::GetReferenceImageWidth() { return sfm.cameras[0].width; }
 
 int ACMH::GetReferenceImageHeight() { return sfm.cameras[0].height; }
 
-// TODO: 80% chance this is wrong
 glm::vec4 ACMH::GetPlaneHypothesis(const int index) {
   return *reinterpret_cast<glm::vec4 *>(plane_hypotheses_host.data() + (index * 4));
 }
