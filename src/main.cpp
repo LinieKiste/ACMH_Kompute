@@ -1,4 +1,5 @@
 #include "main.hpp"
+#include "Tracy.hpp"
 
 int main(int argc, char** argv) {
   if (argc < 2){
@@ -16,14 +17,18 @@ int main(int argc, char** argv) {
     size_t num_images = problems.size();
     std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
 
+    Cache cache;
+
     bool geom_consistency = false;
     for (size_t i = 0; i < num_images; ++i) {
-        helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
+      FrameMark;
+      helpers::ProcessProblem(dense_folder, problems[i], geom_consistency, cache);
     }
 
     geom_consistency = true;
     for (size_t i = 0; i < num_images; ++i) {
-        helpers::ProcessProblem(dense_folder, problems[i], geom_consistency);
+      FrameMark;
+      helpers::ProcessProblem(dense_folder, problems[i], geom_consistency, cache);
     }
 
     helpers::RunFusion(dense_folder, problems, geom_consistency);

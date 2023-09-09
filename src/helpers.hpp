@@ -1,4 +1,5 @@
 #pragma once
+
 #include "ACMH.hpp"
 
 #include <glm/glm.hpp>
@@ -34,7 +35,7 @@ int readNormalDmb (const std::string file_path, cv::Mat_<cv::Vec3f> &normal);
 int writeNormalDmb(const std::string file_path, const cv::Mat_<cv::Vec3f> normal);
 
 void RescaleImageAndCamera(cv::Mat_<cv::Vec3b> &src, cv::Mat_<cv::Vec3b> &dst, cv::Mat_<float> &depth, Camera &camera);
-void ProcessProblem(const std::string &dense_folder, const Problem &problem, bool geom_consistency);
+void ProcessProblem(const std::string &dense_folder, const Problem &problem, bool geom_consistency, Cache cache);
 void GenerateSampleList(const std::string &dense_folder, std::vector<Problem> &problems);
 void RunFusion(std::string &dense_folder, const std::vector<Problem> &problems, bool geom_consistency);
 }

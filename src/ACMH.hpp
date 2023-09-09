@@ -1,5 +1,7 @@
 #pragma once
+
 #include "sfm.hpp"
+#include "cache.hpp"
 
 #include "kompute/Core.hpp"
 #include "kompute/Kompute.hpp"
@@ -35,7 +37,7 @@ struct PushConstants {
 class ACMH {
 public:
   ACMH(std::string dense_folder, int ref_image_id,
-       std::vector<int> src_image_ids);
+       std::vector<int> src_image_ids, Cache cache);
   void init_depths(std::string dense_folder, int ref_image_id,
                    std::vector<int> src_image_ids);
   void VulkanSpaceInitialization(const std::string &dense_folder,
@@ -67,15 +69,8 @@ private:
     std::shared_ptr<kp::TensorT<float>> random_states_tensor;
     std::shared_ptr<kp::TensorT<uint>> selected_views_tensor;
     std::shared_ptr<kp::TensorT<float>> depths_tensor;
-    } tensors;
-  struct {
-    std::vector<uint32_t> random_init;
-    std::vector<uint32_t> black_pixel_update;
-    std::vector<uint32_t> red_pixel_update;
-    std::vector<uint32_t> get_depth_and_normal;
-    std::vector<uint32_t> black_filter;
-    std::vector<uint32_t> red_filter;
-  } shaders;
+  } tensors;
+  Shaders shaders;
 
-    Parameters params;
+  Parameters params;
   };

@@ -1,7 +1,9 @@
 #include "ACMH.hpp"
 #include "helpers.hpp"
+#include "Tracy.hpp"
+#include "TracyVulkan.hpp"
 
-#define LOAD_RENDERDOC
+// #define LOAD_RENDERDOC
 
 #ifdef LOAD_RENDERDOC
 #include "renderdoc_app.h"
@@ -10,19 +12,13 @@
 namespace fs = std::filesystem;
 
 ACMH::ACMH(std::string dense_folder, int ref_image_id,
-           std::vector<int> src_image_ids)
+           std::vector<int> src_image_ids, Cache cache)
     : sfm(dense_folder, ref_image_id, src_image_ids) {
   params.num_images = sfm.params.num_images;
   params.depth_min = sfm.params.depth_min;
   params.depth_max = sfm.params.depth_max;
 
-  // load shaders
-  shaders.random_init = helpers::loadShader("random_init.comp");
-  shaders.black_pixel_update = helpers::loadShader("black_pixel_update.comp");
-  shaders.red_pixel_update = helpers::loadShader("red_pixel_update.comp");
-  shaders.get_depth_and_normal = helpers::loadShader("get_depth_normal.comp");
-  shaders.black_filter = helpers::loadShader("black_filter.comp");
-  shaders.red_filter = helpers::loadShader("red_filter.comp");
+  shaders = cache.shaders;
 }
 
 void ACMH::init_depths(std::string dense_folder, int ref_image_id,
@@ -75,6 +71,7 @@ std::vector<float> cams_to_vec(std::vector<Camera> cameras) {
 void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
                                      int ref_image_id,
                                      std::vector<int> src_image_ids) {
+  ZoneScoped;
   int num_images = (int)sfm.images.size();
 
   // image tensor
@@ -93,6 +90,19 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   std::vector<float> camera_data_host = cams_to_vec(sfm.cameras);
   auto random_states_host = std::vector<float>(ref_no_pixels);
   auto selected_views_host = std::vector<uint32_t>(ref_no_pixels);
+
+  // image tensor
+  tensors.image_tensor = mgr.tensor(img_tensor_data);
+  // plane hypotheses tensor
+  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
+  // costs tensor
+  tensors.costs_tensor = mgr.tensor(costs_host);
+  // camera tensor
+  tensors.camera_tensor = mgr.tensor(camera_data_host);
+  // random states tensor
+  tensors.random_states_tensor = mgr.tensorT(random_states_host);
+  // selected views tensor
+  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
 
   std::vector<float> depth_tensor_data;
   if (params.geom_consistency) {
@@ -135,22 +145,8 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   } else {
     depth_tensor_data.resize(ref_no_pixels);
   }
-
-  // image tensor
-  tensors.image_tensor = mgr.tensor(img_tensor_data);
-  // plane hypotheses tensor
-  tensors.plane_hypotheses_tensor = mgr.tensor(plane_hypotheses_host);
-  // costs tensor
-  tensors.costs_tensor = mgr.tensor(costs_host);
-  // camera tensor
-  tensors.camera_tensor = mgr.tensor(camera_data_host);
-  // random states tensor
-  tensors.random_states_tensor = mgr.tensorT(random_states_host);
-  // selected views tensor
-  tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
   // depths tensor
   tensors.depths_tensor = mgr.tensorT(depth_tensor_data);
-
   kp_params = {tensors.image_tensor,         tensors.plane_hypotheses_tensor,
                tensors.costs_tensor,         tensors.camera_tensor,
                tensors.random_states_tensor, tensors.selected_views_tensor,
@@ -158,6 +154,7 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
 }
 
 void ACMH::RunPatchMatch() {
+  ZoneScoped;
   const int width = sfm.cameras[0].width;
   const int height = sfm.cameras[0].height;
 
@@ -196,10 +193,13 @@ void ACMH::RunPatchMatch() {
   // RANDOM INITIALIZATION
   float seed = 0.75; // magic number
   auto sequence = mgr.sequence();
-  sequence->record<kp::OpTensorSyncDevice>(kp_params)
-      ->record<kp::OpAlgoDispatch>(
-          algo_random_init, std::vector<PushConstants>{{params, 0, seed}})
-      ->eval();
+  {
+    ZoneScopedN("Random Initialization");
+    sequence->record<kp::OpTensorSyncDevice>(kp_params)
+        ->record<kp::OpAlgoDispatch>(
+            algo_random_init, std::vector<PushConstants>{{params, 0, seed}})
+        ->eval();
+  }
 
   auto algo_black_pixel_update =
       mgr.algorithm(kp_params, shaders.black_pixel_update,
@@ -213,26 +213,37 @@ void ACMH::RunPatchMatch() {
                                    {}, std::vector<PushConstants>{{params, 0}});
 
   // TODO: use push constant to distinguish red and black
-  for (int i = 0; i < max_iterations; ++i) {
+  {
+    ZoneScopedNC("Checkerboard propagation", tracy::Color::DarkRed);
+    for (int i = 0; i < max_iterations; ++i) {
 #ifdef LOAD_RENDERDOC
-  if (rdoc_api && params.geom_consistency)
-    rdoc_api->StartFrameCapture(NULL, NULL);
+      if (rdoc_api && params.geom_consistency)
+        rdoc_api->StartFrameCapture(NULL, NULL);
 #endif
-    mgr.sequence()
-        ->record<kp::OpAlgoDispatch>(algo_black_pixel_update,
-                                     std::vector<PushConstants>({{params, i}}))
-        ->eval();
+  {
+    ZoneScopedN("Black pixel update");
+      mgr.sequence()
+          ->record<kp::OpAlgoDispatch>(
+              algo_black_pixel_update,
+              std::vector<PushConstants>({{params, i}}))
+          ->eval();
+  }
 
 #ifdef LOAD_RENDERDOC
-  if (rdoc_api && params.geom_consistency)
-    rdoc_api->EndFrameCapture(NULL, NULL);
+      if (rdoc_api && params.geom_consistency)
+        rdoc_api->EndFrameCapture(NULL, NULL);
 #endif
 
-    mgr.sequence()
-        ->record<kp::OpAlgoDispatch>(algo_red_pixel_update,
-                                     std::vector<PushConstants>({{params, i}}))
-        ->eval();
-    printf("iteration: %d\n", i);
+      {
+        ZoneScopedN("Red pixel update");
+        mgr.sequence()
+            ->record<kp::OpAlgoDispatch>(
+                algo_red_pixel_update,
+                std::vector<PushConstants>({{params, i}}))
+            ->eval();
+        printf("iteration: %d\n", i);
+      }
+    }
   }
 
   auto algo_depth_normal =
@@ -240,35 +251,41 @@ void ACMH::RunPatchMatch() {
                     kp::Workgroup({grid_size_randinit.x, grid_size_randinit.y,
                                    grid_size_randinit.z}),
                                    {}, std::vector<PushConstants>{{params, 0}});
-  mgr.sequence()
+  {
+    ZoneScopedN("Get depth and normal");
+    mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_depth_normal,
                                      std::vector<PushConstants>({{params, 0}}))
         ->eval();
+  }
 
-  auto algo_black_pixel_filter =
-      mgr.algorithm(kp_params, shaders.black_filter,
-                    kp::Workgroup({grid_size_checkerboard.x, grid_size_checkerboard.y,
-                                   grid_size_checkerboard.z}),
-                                   {}, std::vector<PushConstants>{{params, 0}});
-  auto algo_red_pixel_filter =
-      mgr.algorithm(kp_params, shaders.red_filter,
-                    kp::Workgroup({grid_size_checkerboard.x, grid_size_checkerboard.y,
-                                   grid_size_checkerboard.z}),
-                                   {}, std::vector<PushConstants>{{params, 0}});
+    auto algo_black_pixel_filter = mgr.algorithm(
+        kp_params, shaders.black_filter,
+        kp::Workgroup({grid_size_checkerboard.x, grid_size_checkerboard.y,
+                       grid_size_checkerboard.z}),
+        {}, std::vector<PushConstants>{{params, 0}});
+    auto algo_red_pixel_filter = mgr.algorithm(
+        kp_params, shaders.red_filter,
+        kp::Workgroup({grid_size_checkerboard.x, grid_size_checkerboard.y,
+                       grid_size_checkerboard.z}),
+        {}, std::vector<PushConstants>{{params, 0}});
 
-  // TODO: use push constants to distinguish red and black
-  mgr.sequence()
-      ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
-                                   std::vector<PushConstants>({{params, 0}}))
-      ->eval()
-      ->record<kp::OpAlgoDispatch>(algo_red_pixel_filter,
-                                   std::vector<PushConstants>({{params, 0}}))
-      ->eval();
-       
-  mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
-  this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
-  this->costs_host = tensors.costs_tensor->vector();
-}
+    // TODO: use push constants to distinguish red and black
+  {
+    ZoneScopedN("Filtering");
+    mgr.sequence()
+        ->record<kp::OpAlgoDispatch>(algo_black_pixel_filter,
+                                     std::vector<PushConstants>({{params, 0}}))
+        ->eval()
+        ->record<kp::OpAlgoDispatch>(algo_red_pixel_filter,
+                                     std::vector<PushConstants>({{params, 0}}))
+        ->eval();
+  }
+
+    mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
+    this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
+    this->costs_host = tensors.costs_tensor->vector();
+  }
 
 // helpers
 void ACMH::SetGeomConsistencyParams() {

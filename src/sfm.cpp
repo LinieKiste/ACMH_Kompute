@@ -1,12 +1,16 @@
 #include "sfm.hpp"
+#include "Tracy.hpp"
 
 SfM::SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src_image_ids) {
+  ZoneScopedN("SfM initialization");
   images.clear();
   cameras.clear();
 
   std::string image_folder = dense_folder + std::string("/images");
   std::string cam_folder = dense_folder + std::string("/cams");
 
+  {
+  ZoneScopedN("load images + camera");
   // reference image and camera
   get_image_and_camera(ref_image_id, image_folder, cam_folder);
 
@@ -15,8 +19,11 @@ SfM::SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src
   for (size_t i = 0; i < num_src_images; ++i) {
     get_image_and_camera(src_image_ids[i], image_folder, cam_folder);
   }
+  }
 
   // Scale cameras and images
+  {
+  ZoneScopedN("scale images + camera");
   for (size_t i = 0; i < images.size(); ++i) {
     if (images[i].cols <= params.max_image_size &&
         images[i].rows <= params.max_image_size) {
@@ -46,6 +53,7 @@ SfM::SfM(const std::string &dense_folder, int ref_image_id, std::vector<int> src
     cameras[i].K[5] *= scale_y;
     cameras[i].height = scaled_image_float.rows;
     cameras[i].width = scaled_image_float.cols;
+  }
   }
 
   params.depth_min = cameras[0].depth_min * 0.6f;

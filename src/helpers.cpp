@@ -1,11 +1,13 @@
 #include "helpers.hpp"
+#include "Tracy.hpp"
 
 namespace helpers {
 std::vector<uint32_t> loadShader(const std::string &name) {
     std::stringstream in_path, spv_path, command;
     in_path << "./src/shaders/" << name;
     spv_path << "./spv/" << name << ".spv";
-    command << "glslangValidator --quiet -V -gVS " << in_path.str() << " -o " << spv_path.str();
+    // add -gVS to glslangValidator to get debug symbols
+    command << "glslangValidator --quiet -V " << in_path.str() << " -o " << spv_path.str();
 
     if (system(command.str().c_str())) {
       throw std::runtime_error("Error running glslangValidator command");
@@ -197,15 +199,16 @@ void GenerateSampleList(const std::string &dense_folder, std::vector<Problem> &p
     }
 }
 
-void ProcessProblem(const std::string &dense_folder, const Problem &problem, bool geom_consistency)
+void ProcessProblem(const std::string &dense_folder, const Problem &problem, bool geom_consistency, Cache cache)
 {
+    ZoneScoped;
     std::cout << "Processing image " << std::setw(8) << std::setfill('0') << problem.ref_image_id << "..." << std::endl;
     std::stringstream result_path;
     result_path << dense_folder << "/ACMH" << "/2333_" << std::setw(8) << std::setfill('0') << problem.ref_image_id;
     std::string result_folder = result_path.str();
     mkdir(result_folder.c_str(), 0777);
 
-    ACMH acmh(dense_folder, problem.ref_image_id, problem.src_image_ids);
+    ACMH acmh(dense_folder, problem.ref_image_id, problem.src_image_ids, cache);
     if (geom_consistency) {
       acmh.SetGeomConsistencyParams();
       acmh.init_depths(dense_folder, problem.ref_image_id, problem.src_image_ids);
@@ -350,6 +353,7 @@ float GetAngle( const cv::Vec3f &v1, const cv::Vec3f &v2 )
 
 void RunFusion(std::string &dense_folder, const std::vector<Problem> &problems, bool geom_consistency)
 {
+    ZoneScoped;
     size_t num_images = problems.size();
     std::string image_folder = dense_folder + std::string("/images");
     std::string cam_folder = dense_folder + std::string("/cams");
