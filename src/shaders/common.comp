@@ -1,5 +1,5 @@
 #extension GL_GOOGLE_include_directive : enable
-#include "noise2D.glsl"
+#include "noise2D.comp"
 
 #define FLT_EPSILON 1.19209290E-07F
 #define M_PI 3.1415926535897932384626433832795
@@ -64,10 +64,10 @@ float rand(){
     vec2 xy = gl_GlobalInvocationID.xy;
     int rd_idx = int(xy.y * cam0.width + xy.x);
     float seed = random_states[rd_idx];
-    xy += seed;
-    random_states[rd_idx] = seed + 1;
+    random_states[rd_idx] += 1;
 
-    float result = abs(snoise(xy));
+    float result = abs(snoise(vec2(seed, seed)));
+    result = clamp(result, 0.2, .8);
     return result;
 }
 

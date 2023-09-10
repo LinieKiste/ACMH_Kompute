@@ -2,6 +2,9 @@
 #include "helpers.hpp"
 #include "Tracy.hpp"
 
+#include <random>
+#include <algorithm>
+
 #define LOAD_RENDERDOC
 
 #ifdef LOAD_RENDERDOC
@@ -65,6 +68,18 @@ std::vector<float> cams_to_vec(std::vector<Camera> cameras) {
   return vec;
 }
 
+// from https://stackoverflow.com/a/23143753
+std::vector<float> init_random_states(int size) {
+  std::random_device rnd_device;
+  std::mt19937 mersenne_engine{rnd_device()}; // Generates random integers
+  std::uniform_real_distribution<float> dist{1., 20.};
+  auto gen = [&dist, &mersenne_engine]() { return dist(mersenne_engine); };
+
+  std::vector<float> vec(size);
+  std::generate(begin(vec), end(vec), gen);
+  return vec;
+}
+
 void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
                                      int ref_image_id,
                                      std::vector<int> src_image_ids) {
@@ -85,7 +100,7 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
       std::vector<float>(4 * ref_no_pixels); // glm::vec4 per pixel
   costs_host = std::vector<float>(ref_no_pixels);
   std::vector<float> camera_data_host = cams_to_vec(sfm.cameras);
-  auto random_states_host = std::vector<float>(ref_no_pixels);
+  auto random_states_host = init_random_states(ref_no_pixels);
   auto selected_views_host = std::vector<uint32_t>(ref_no_pixels);
 
   std::vector<float> depth_tensor_data;
@@ -189,19 +204,10 @@ void ACMH::RunPatchMatch() {
 #endif
 
   // RANDOM INITIALIZATION
-#ifdef LOAD_RENDERDOC
-      if (rdoc_api)
-        rdoc_api->StartFrameCapture(NULL, NULL);
-#endif
     mgr.sequence()->record<kp::OpTensorSyncDevice>(kp_params)
         ->record<kp::OpAlgoDispatch>(
             algo_random_init, std::vector<PushConstants>{{params, 0}})
             ->eval();
-
-#ifdef LOAD_RENDERDOC
-      if (rdoc_api)
-        rdoc_api->EndFrameCapture(NULL, NULL);
-#endif
 
   auto algo_black_pixel_update =
       mgr.algorithm(kp_params, shaders.black_pixel_update,
@@ -219,11 +225,21 @@ void ACMH::RunPatchMatch() {
     ZoneScopedNC("Checkerboard propagation", tracy::Color::DarkRed);
     for (int i = 0; i < max_iterations; ++i) {
   {
+#ifdef LOAD_RENDERDOC
+      if (rdoc_api)
+        rdoc_api->StartFrameCapture(NULL, NULL);
+#endif
     ZoneScopedN("Iteration");
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_black_pixel_update,
                                      std::vector<PushConstants>({{params, i}}))
         ->eval();
+
+#ifdef LOAD_RENDERDOC
+      if (rdoc_api)
+        rdoc_api->EndFrameCapture(NULL, NULL);
+#endif
+// exit(0);
     mgr.sequence()
         ->record<kp::OpAlgoDispatch>(algo_red_pixel_update,
                                      std::vector<PushConstants>({{params, i}}))

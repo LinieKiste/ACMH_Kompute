@@ -26,10 +26,10 @@ int main(int argc, char** argv) {
     }
 
     geom_consistency = true;
-    // for (size_t i = 0; i < num_images; ++i) {
-    //   FrameMark;
-    //   helpers::ProcessProblem(dense_folder, problems[i], geom_consistency, cache);
-    // }
+    for (size_t i = 0; i < num_images; ++i) {
+      FrameMark;
+      helpers::ProcessProblem(dense_folder, problems[i], geom_consistency, cache);
+    }
 
     helpers::RunFusion(dense_folder, problems, geom_consistency);
 

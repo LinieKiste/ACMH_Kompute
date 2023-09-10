@@ -102,7 +102,6 @@ void RandomInitialization() {
     }
 
     int center = int(p.y * width + p.x);
-    random_states[center] = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y;
 
     if (!pcs.params.geom_consistency) {
         plane_hypotheses[center] = GenerateRandomPlaneHypothesis(ref_camera, p, pcs.params.depth_min, pcs.params.depth_max);
