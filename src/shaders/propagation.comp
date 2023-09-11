@@ -86,13 +86,13 @@ void Mat3DotVec3(const float mat[9], const vec4 vec, out vec4 result)
   result.w = 0.0;
 }
 
-vec4 GeneratePerturbedNormal(const Camera camera, const ivec2 p, const vec4 normal, const float perturbation)
+vec4 GeneratePerturbedNormal(const Camera camera, const ivec2 p, const vec4 normal, int rand_center, const float perturbation)
 {
     vec4 view_direction = GetViewDirection(camera, p, 1.0f);
 
-    const float a1 = (rand() - 0.5f) * perturbation;
-    const float a2 = (rand() - 0.5f) * perturbation;
-    const float a3 = (rand() - 0.5f) * perturbation;
+    const float a1 = (rand(rand_center) - 0.5f) * perturbation;
+    const float a2 = (rand(rand_center) - 0.5f) * perturbation;
+    const float a3 = (rand(rand_center) - 0.5f) * perturbation;
 
     const float sin_a1 = sin(a1);
     const float sin_a2 = sin(a2);
@@ -128,19 +128,19 @@ float GetDistance2Origin(const Camera camera, const ivec2 p, const float depth, 
     return -(normal.x * X[0] + normal.y * X[1] + normal.z * X[2]);
 }
 
-void PlaneHypothesisRefinement(inout vec4 plane_hypothesis, inout float depth, inout float cost, const float[32] view_weights, const float weight_norm, const ivec2 p)
+void PlaneHypothesisRefinement(inout vec4 plane_hypothesis, inout float depth, inout float cost, int rand_center, const float[32] view_weights, const float weight_norm, const ivec2 p)
 {
     float perturbation = 0.02f;
 
-    float depth_rand = rand() * (pcs.params.depth_max - pcs.params.depth_min) + pcs.params.depth_min;
-    vec4 plane_hypothesis_rand = GenerateRandomNormal(get_camera(0), p, depth);
+    float depth_rand = rand(rand_center) * (pcs.params.depth_max - pcs.params.depth_min) + pcs.params.depth_min;
+    vec4 plane_hypothesis_rand = GenerateRandomNormal(get_camera(0), p, rand_center, depth);
     float depth_perturbed = depth;
     const float depth_min_perturbed = (1 - perturbation) * depth_perturbed;
     const float depth_max_perturbed = (1 + perturbation) * depth_perturbed;
     do {
-        depth_perturbed = rand() * (depth_max_perturbed - depth_min_perturbed) + depth_min_perturbed;
+        depth_perturbed = rand(rand_center) * (depth_max_perturbed - depth_min_perturbed) + depth_min_perturbed;
     } while (depth_perturbed < pcs.params.depth_min && depth_perturbed > pcs.params.depth_max);
-    vec4 plane_hypothesis_perturbed = GeneratePerturbedNormal(get_camera(0), p, plane_hypothesis, perturbation * M_PI);
+    vec4 plane_hypothesis_perturbed = GeneratePerturbedNormal(get_camera(0), p, plane_hypothesis, rand_center, perturbation * M_PI);
 
     const int num_planes = 5;
     float depths[num_planes] = {depth_rand, depth, depth_rand, depth, depth_perturbed};
@@ -433,7 +433,7 @@ void CheckerboardPropagation(const ivec2 p, const int iter)
 
     TransformPDFToCDF(sampling_probs, pcs.params.num_images - 1);
     for (int s = 0; s < 15; ++s) { // sample is a reserved keyword
-        const float rand_prob = rand() - FLT_EPSILON;
+        const float rand_prob = rand(center) - FLT_EPSILON;
 
         for (int image_id = 0; image_id < pcs.params.num_images - 1; ++image_id) {
             const float prob = sampling_probs[image_id];
@@ -503,5 +503,5 @@ void CheckerboardPropagation(const ivec2 p, const int iter)
         }
     }
 
-    PlaneHypothesisRefinement(plane_hypotheses[center], depth_now, costs[center], view_weights, weight_norm, p);
+    PlaneHypothesisRefinement(plane_hypotheses[center], depth_now, costs[center], center, view_weights, weight_norm, p);
 }
