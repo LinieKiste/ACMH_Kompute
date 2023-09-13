@@ -24,6 +24,7 @@ int main(int argc, char** argv) {
       FrameMark;
       helpers::ProcessProblem(dense_folder, problems[i], geom_consistency, cache);
     }
+    FrameMark;
 
     // geom_consistency = true;
     // for (size_t i = 0; i < num_images; ++i) {
