@@ -6,10 +6,20 @@
 #define M_PI 3.1415926535897932384626433832795
 float PHI = 1.61803398874989484820459;  // Φ = Golden Ratio   
 
+struct Camera {
+  float K[12];
+  float R[12];
+  float t[4];
+  float height;
+  float width;
+  float depth_min;
+  float depth_max;
+};
+
 layout (set = 0, binding = 0) buffer images_buf { readonly restrict float images[]; };
 layout (set = 0, binding = 1) buffer plane_buf { vec4 plane_hypotheses[]; };
 layout (set = 0, binding = 2) buffer costs_buf { float costs[]; };
-layout (set = 0, binding = 3) buffer camera_buf { readonly restrict float cameras[]; };
+layout (set = 0, binding = 3) buffer camera_buf { readonly restrict Camera cameras[]; };
 layout (set = 0, binding = 4) buffer random_states_buf {float random_states[]; };
 layout (set = 0, binding = 5) buffer selected_views_buf {uint selected_views[]; };
 layout (set = 0, binding = 6) buffer depths_buf {float depths[]; };
@@ -32,30 +42,8 @@ layout(push_constant) uniform PushConstants {
     int iter;
     } pcs;
 
-struct Camera {
-  float K[9];
-  float R[9];
-  float t[3];
-  float height;
-  float width;
-  float depth_min;
-  float depth_max;
-};
-
 Camera get_camera(int index) {
-    // size of camera is 9+9+3+1+1+1+1 = 25
-    int cam_size = 9+9+3+(4*1); // arrays + 4 scalars
-    int i = index * cam_size;
-    Camera result = Camera(
-       float[9](cameras[i], cameras[i+1], cameras[i+2], cameras[i+3], cameras[i+4], cameras[i+5], cameras[i+6], cameras[i+7], cameras[i+8]),
-       float[9](cameras[i+9], cameras[i+10], cameras[i+11], cameras[i+12], cameras[i+13], cameras[i+14], cameras[i+15], cameras[i+16], cameras[i+17]),
-       float[3](cameras[i+18], cameras[i+19], cameras[i+20]),
-       cameras[i+21],
-       cameras[i+22],
-       cameras[i+23],
-       cameras[i+24]
-    );
-    return result;
+    return cameras[index];
 }
 
 // from https://stackoverflow.com/a/28095165
@@ -63,7 +51,7 @@ float rand(int center){
     float seed = random_states[center];
     random_states[center] += 1;
 
-    float result = abs(snoise(vec2(seed, seed+1)));
+    float result = abs(snoise(vec2(seed, seed)));
     return result;
 }
 // float rand(int center){
@@ -72,11 +60,7 @@ float rand(int center){
 //     center += 1;
 //     float tmp = fract(tan(distance(center*PHI, center)*seed)*center);
 //     
-//     if(tmp < 0.00000001){
-//     debugPrintfEXT("My float is %f", tmp);
-//     }
-//     return 0.5;
-//     return tmp;
+//     return clamp(tmp, 0.2, 0.8);
 // }
 
 int image_offset(int image_idx){

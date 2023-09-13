@@ -12,9 +12,9 @@
 #include <vector>
 
 struct Camera {
-  std::array<float, 9> K;
-  std::array<float, 9> R;
-  std::array<float, 3> t;
+  std::array<float, 12> K;
+  std::array<float, 12> R;
+  std::array<float, 4> t;
   float height;
   float width;
   float depth_min;
