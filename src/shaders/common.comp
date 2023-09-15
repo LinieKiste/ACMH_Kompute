@@ -23,6 +23,7 @@ layout (set = 0, binding = 3) buffer camera_buf { readonly restrict Camera camer
 layout (set = 0, binding = 4) buffer random_states_buf {float random_states[]; };
 layout (set = 0, binding = 5) buffer selected_views_buf {uint selected_views[]; };
 layout (set = 0, binding = 6) buffer depths_buf {float depths[]; };
+layout (set = 0, binding = 7) buffer offsets_buf {int img_offsets[]; };
 
 struct Parameters {
   int max_iterations;
@@ -45,13 +46,47 @@ layout(push_constant) uniform PushConstants {
 Camera get_camera(int index) {
     return cameras[index];
 }
+// A single iteration of Bob Jenkins' One-At-A-Time hashing algorithm.
+uint hash( uint x ) {
+    x += ( x << 10u );
+    x ^= ( x >>  6u );
+    x += ( x <<  3u );
+    x ^= ( x >> 11u );
+    x += ( x << 15u );
+    return x;
+}
 
-// from https://stackoverflow.com/a/28095165
+// Compound versions of the hashing algorithm I whipped together.
+uint hash( uvec2 v ) { return hash( v.x ^ hash(v.y)                         ); }
+uint hash( uvec3 v ) { return hash( v.x ^ hash(v.y) ^ hash(v.z)             ); }
+uint hash( uvec4 v ) { return hash( v.x ^ hash(v.y) ^ hash(v.z) ^ hash(v.w) ); }
+
+
+
+// Construct a float with half-open range [0:1] using low 23 bits.
+// All zeroes yields 0.0, all ones yields the next smallest representable value below 1.0.
+float floatConstruct( uint m ) {
+    const uint ieeeMantissa = 0x007FFFFFu; // binary32 mantissa bitmask
+    const uint ieeeOne      = 0x3F800000u; // 1.0 in IEEE binary32
+
+    m &= ieeeMantissa;                     // Keep only mantissa bits (fractional part)
+    m |= ieeeOne;                          // Add fractional part to 1.0
+
+    float  f = uintBitsToFloat( m );       // Range [1:2]
+    return f - 1.0;                        // Range [0:1]
+}
+
+
+
+// Pseudo-random value in half-open range [0:1].
+float random( float x ) { return floatConstruct(hash(floatBitsToUint(x))); }
+
+// from https://stackoverflow.com/a/17479300
 float rand(int center){
     float seed = random_states[center];
-    random_states[center] += 1;
 
-    float result = abs(snoise(vec2(seed, seed)));
+    float result = floatConstruct(hash(floatBitsToUint(seed)));
+    random_states[center] += 1;
     return result;
 }
 // float rand(int center){
@@ -60,23 +95,23 @@ float rand(int center){
 //     center += 1;
 //     float tmp = fract(tan(distance(center*PHI, center)*seed)*center);
 //     
-//     return clamp(tmp, 0.2, 0.8);
+//     return clamp(tmp, 0.3, 0.7);
 // }
 
-int image_offset(int image_idx){
-    int offset = 0;
-    for(int i = 0; i < image_idx; i++){
-        Camera camera = get_camera(i);
-        int width = int(camera.width);
-        int height = int(camera.height);
-        offset += width*height;
-    }
-    return offset;
-}
+// int image_offset(int image_idx){
+//     int offset = 0;
+//     for(int i = 0; i < image_idx; i++){
+//         Camera camera = get_camera(i);
+//         int width = int(camera.width);
+//         int height = int(camera.height);
+//         offset += width*height;
+//     }
+//     return offset;
+// }
 
 float get_pixel_from_image(int image_idx, ivec2 p){
     Camera camera = get_camera(image_idx);
-    int offset = image_offset(image_idx);
+    int offset = img_offsets[image_idx];
     p = max(ivec2(0, 0), p);
     p = min(ivec2(camera.width, camera.height), p);
     offset += p.y * int(camera.width) + p.x;
@@ -89,17 +124,17 @@ float get_pixel_from_image(int image_idx, vec2 p){
 
 float[32] init_array(float value) {
     float arr[32];
-    arr[0] = value;
     for (int i = 1; i < 32; ++i) {
         arr[i] = 0.0;
     }
+    arr[0] = value;
     return arr;
 }
 
 bool[8] init_flags(bool value){
     bool arr[8];
     arr[0] = value;
-    for (int i = 1; i < 32; ++i) {
+    for (int i = 1; i < 8; ++i) {
         arr[i] = false;
     }
     return arr;

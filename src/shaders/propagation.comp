@@ -4,7 +4,7 @@
 
 float get_depth(int image_idx, ivec2 p){
     Camera camera = get_camera(image_idx);
-    int offset = image_offset(image_idx);
+    int offset = img_offsets[image_idx];
     p = max(ivec2(0, 0), p);
     p = min(ivec2(camera.width, camera.height), p);
     offset += p.y * int(camera.width) + p.x;

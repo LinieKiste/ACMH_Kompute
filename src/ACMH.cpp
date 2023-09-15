@@ -5,7 +5,7 @@
 #include <random>
 #include <algorithm>
 
-// #define LOAD_RENDERDOC
+#define LOAD_RENDERDOC
 
 #ifdef LOAD_RENDERDOC
 #include "renderdoc_app.h"
@@ -72,7 +72,7 @@ std::vector<float> cams_to_vec(std::vector<Camera> cameras) {
 std::vector<float> init_random_states(int size) {
   std::random_device rnd_device;
   std::mt19937 mersenne_engine{rnd_device()}; // Generates random integers
-  std::uniform_real_distribution<float> dist{.1, 50};
+  std::uniform_real_distribution<float> dist{.1, 20};
   auto gen = [&dist, &mersenne_engine]() { return dist(mersenne_engine); };
 
   std::vector<float> vec(size);
@@ -88,12 +88,16 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
 
   // image tensor
   std::vector<float> img_tensor_data;
+  std::vector<int> dims_tensor_data;
   int ref_no_pixels = sfm.cameras[0].height * sfm.cameras[0].width;
+
+  int offset = 0;
   for (int i = 0; i < num_images; ++i) {
     auto image_vec = mat_to_vec(sfm.images[i]);
     img_tensor_data.insert(img_tensor_data.end(), image_vec.begin(),
                            image_vec.end());
-
+    dims_tensor_data.push_back(offset);
+    offset += sfm.cameras[i].height * sfm.cameras[i].width;
   }
 
   plane_hypotheses_host =
@@ -159,11 +163,13 @@ void ACMH::VulkanSpaceInitialization(const std::string &dense_folder,
   tensors.selected_views_tensor = mgr.tensorT(selected_views_host);
   // depths tensor
   tensors.depths_tensor = mgr.tensorT(depth_tensor_data);
+  // dims tensor
+  tensors.dims_tensor = mgr.tensorT(dims_tensor_data);
 
   kp_params = {tensors.image_tensor,         tensors.plane_hypotheses_tensor,
                tensors.costs_tensor,         tensors.camera_tensor,
                tensors.random_states_tensor, tensors.selected_views_tensor,
-               tensors.depths_tensor};
+               tensors.depths_tensor, tensors.dims_tensor};
 }
 
 void ACMH::RunPatchMatch() {
@@ -207,11 +213,14 @@ void ACMH::RunPatchMatch() {
       if (rdoc_api)
         rdoc_api->StartFrameCapture(NULL, NULL);
 #endif
+  {
+    ZoneScopedN("Random Init");
   // RANDOM INITIALIZATION
     mgr.sequence()->record<kp::OpTensorSyncDevice>(kp_params)
         ->record<kp::OpAlgoDispatch>(
             algo_random_init, std::vector<PushConstants>{{params, 0}})
             ->eval();
+  }
 
   auto algo_black_pixel_update =
       mgr.algorithm(kp_params, shaders.black_pixel_update,
@@ -245,6 +254,10 @@ void ACMH::RunPatchMatch() {
   }
 
         printf("iteration: %d\n", i);
+#ifdef LOAD_RENDERDOC
+      if (rdoc_api)
+        rdoc_api->EndFrameCapture(NULL, NULL);
+#endif
     }
   }
 
@@ -283,14 +296,13 @@ void ACMH::RunPatchMatch() {
         algo_red_pixel_filter, std::vector<PushConstants>({{params, 0}}))
         ->eval();
   }
-#ifdef LOAD_RENDERDOC
-      if (rdoc_api)
-        rdoc_api->EndFrameCapture(NULL, NULL);
-#endif
 
+  {
+    ZoneScopedN("Sync tensors");
     mgr.sequence()->record<kp::OpTensorSyncLocal>(kp_params)->eval();
     this->plane_hypotheses_host = tensors.plane_hypotheses_tensor->vector();
     this->costs_host = tensors.costs_tensor->vector();
+  }
   }
 
 // helpers

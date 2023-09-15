@@ -68,6 +68,7 @@ private:
     std::shared_ptr<kp::TensorT<float>> random_states_tensor;
     std::shared_ptr<kp::TensorT<uint>> selected_views_tensor;
     std::shared_ptr<kp::TensorT<float>> depths_tensor;
+    std::shared_ptr<kp::TensorT<int>> dims_tensor;
   } tensors;
   Shaders shaders;
 
