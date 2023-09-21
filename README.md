@@ -20,4 +20,4 @@ The directory structure of the dataset should be the following:
         ├─── img3.jpg
         ...
 ```
-The resulting point cloud can be found as a .ply file in $\{dataset_folder\}/acmh_input/ACMH/ACMH_model.ply
+The resulting point cloud can be found as a .ply file in `$\{dataset_folder\}/acmh_input/ACMH/ACMH_model.ply`
