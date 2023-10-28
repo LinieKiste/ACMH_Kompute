@@ -24,8 +24,8 @@ The resulting point cloud can be found as a .ply file in `${dataset_folder}/acmh
 
 ## Sample reconstructions:
 <br>
-<img src="images/statue_vulkan_col.png" alt="drawing" width="400"/>
-<img src="images/statue_vulkan_normal.png" alt="drawing" width="400"/>
+<img src="images/statue_vulkan_col.png" alt="drawing" width="300"/>
+<img src="images/statue_vulkan_normal.png" alt="drawing" width="300"/>
 <br>
-<img src="images/relief_vulkan_col.png" alt="drawing" width="400"/>
-<img src="images/relief_vulkan_normal.png" alt="drawing" width="400"/>
+<img src="images/relief_vulkan_col.png" alt="drawing" width="300"/>
+<img src="images/relief_vulkan_normal.png" alt="drawing" width="300"/>
