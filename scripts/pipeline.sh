@@ -3,20 +3,20 @@
 help(){
         echo "Usage: pipeline.sh -d [./path/to/dataset]"
         echo "the dataset directory should contain an \"images\" directory"
-        echo "use -f to run the full SfM+MVS pipeline. Otherwise, this script only runs SfM+converter"
+        echo "use -e to run the full SfM+MVS pipeline. Otherwise, this script only runs SfM+converter"
 }
 
 acmh_path=""
 DATASET_PATH=""
 echo $DATASET_PATH
-while getopts "hd:f:" option; do
+while getopts "hd:e:" option; do
    case $option in
       h|help) # display Help
          help
          exit;;
       d|dataset) # dataset path
          DATASET_PATH=$OPTARG;;
-      f|full) # ACMH executable path
+      e|executable) # ACMH executable path
          acmh_path=$OPTARG;;
    esac
 done
